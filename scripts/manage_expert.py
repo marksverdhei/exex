@@ -18,7 +18,8 @@ def main():
     parser_remove.add_argument("--expert_index", type=int, required=True, help="Index of the expert to remove")
     
     # Add expert parser
-    parser_add = subparsers.add_parser("add", help="Add a new expert to the model")
+    parser_add = subparsers.add_parser("add", help="Add a new expert to the model (cloned from an existing slot)")
+    parser_add.add_argument("--clone_from", type=int, default=0, help="Source expert index to clone")
     parser_add.add_argument("--label", type=str, default=None, help="Label to give to the new expert")
     
     # Label expert parser
@@ -34,12 +35,14 @@ def main():
         manager.remove_expert(args.expert_index, args.output_dir)
         
     elif args.action == "add":
-        manager.add_expert(args.output_dir, label=args.label)
-        
+        new_idx = manager.clone_expert(args.clone_from, label=args.label)
+        print(f"Cloned expert {args.clone_from} -> new slot {new_idx}")
+        os.makedirs(args.output_dir, exist_ok=True)
+        manager.model.save_pretrained(args.output_dir)
+        manager.config.save_pretrained(args.output_dir)
+
     elif args.action == "label":
         manager.label_expert(args.expert_index, args.label_name)
-        # Assuming we want to save after just labeling
-        import os
         os.makedirs(args.output_dir, exist_ok=True)
         print(f"Saving config with new labels to {args.output_dir}...")
         manager.config.save_pretrained(args.output_dir)

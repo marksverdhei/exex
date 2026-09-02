@@ -63,6 +63,10 @@ class TestPrune:
             out = tiny_gemma4_moe(**sample_batch)
         assert torch.isfinite(out.loss)
 
+    def test_remove_dedupes_indices(self, tiny_gemma4_moe):
+        arch = prune_experts(tiny_gemma4_moe, [1, 1, 3], mode="remove")
+        assert arch.num_experts == 2
+
     def test_remove_respects_top_k(self, tiny_gemma4_moe):
         with pytest.raises(ValueError, match="top_k"):
             prune_experts(tiny_gemma4_moe, [0, 1, 2], mode="remove")

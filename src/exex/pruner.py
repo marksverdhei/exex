@@ -113,6 +113,7 @@ def select_prune_candidates(scores, num_prune=None, threshold=None,
 def prune_experts(model, indices, mode="remove"):
     """Prune experts by index. ``remove`` slices them out (router shrinks);
     ``zero`` zeroes weights in place for sparse runtimes."""
+    indices = sorted(set(indices))
     if mode == "remove":
         manager = ExpertManager.from_model(model)
         if manager.arch.num_experts - len(indices) < manager.arch.top_k:

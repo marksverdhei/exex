@@ -68,8 +68,9 @@ def install_expert(model, cartridge, expert_name, target_index=None, alpha=1.0,
 
     labels = cartridge.manifest[expert_name].get("labels") or []
     if labels:
+        # expert_labels values are always plain strings
         manager = ExpertManager.from_model(model)
-        manager.label_expert(target_index, labels[0] if len(labels) == 1 else labels)
+        manager.label_expert(target_index, ",".join(labels))
 
     return target_index
 
