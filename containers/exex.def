@@ -35,6 +35,11 @@ From: nvcr.io/nvidia/pytorch:25.06-py3
     # libcuda.so symlink for compat stacks
     ln -sf /usr/local/cuda/compat/lib/libcuda.so.1 /usr/local/cuda/compat/lib/libcuda.so 2>/dev/null || true
 
+%environment
+    # A bound $HOME with arch-mismatched user site-packages (e.g. x86 numpy
+    # in ~/.local on an ARM node) must never shadow the container's stack.
+    export PYTHONNOUSERSITE=1
+
 %test
     python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
     python3 -c "import transformers; print('transformers', transformers.__version__)"
