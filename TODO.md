@@ -10,7 +10,7 @@
 - [x] 8. `pruner.py` + `scripts/prune_experts.py`: utilisation + router-gate-weighted activation-norm criteria, remove or zero modes (#8)
 - [x] 9. Tests for arch/cartridge/merger/pruner on tiny fixture; full suite green
 - [x] 10. README rewrite to match reality; full-rank view training as default story (#3, #11)
-- [ ] 11. Push branch, open PR, comment on affected issues
+- [x] 11. Push branch, open PR, comment on affected issues
 
 Deferred (blocked or out of scope for this branch):
 - #10 end-to-end 26B validation — needs real GPU (batched for Markus)
