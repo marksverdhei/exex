@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from exex.arch import MoEArch, iter_moe_layers
+
 
 class ExpertManager:
     def __init__(self, model_path=None):
@@ -10,7 +12,7 @@ class ExpertManager:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_path, torch_dtype=torch.float16, device_map="cpu"
             )
-            self.layers = self.model.model.layers
+            self.arch = MoEArch.from_model(self.model)
         # Fields set by from_model() when model_path is None
 
     @classmethod
@@ -19,7 +21,7 @@ class ExpertManager:
         instance = cls.__new__(cls)
         instance.model = model
         instance.config = model.config
-        instance.layers = model.model.layers
+        instance.arch = MoEArch.from_model(model)
         return instance
 
     def label_expert(self, expert_index, label):
@@ -32,9 +34,11 @@ class ExpertManager:
 
     def clone_expert(self, source_idx, label=None):
         """Clone an existing expert to a new slot at the end."""
-        for layer in self.layers:
-            if not hasattr(layer, "experts"):
-                continue
+        if not 0 <= source_idx < self.arch.num_experts:
+            raise IndexError(
+                f"source_idx {source_idx} out of range (num_experts={self.arch.num_experts})"
+            )
+        for _, layer in iter_moe_layers(self.model):
             experts = layer.experts
 
             # Expand fused expert tensors
@@ -49,21 +53,20 @@ class ExpertManager:
             experts.num_experts += 1
 
             # Expand router
-            if hasattr(layer, "router"):
-                router = layer.router
-                source_row = router.proj.weight.data[source_idx:source_idx+1].clone()
-                new_weight = torch.cat([router.proj.weight.data, source_row], dim=0)
-                router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False)
-                router.proj.weight = nn.Parameter(new_weight)
+            router = layer.router
+            source_row = router.proj.weight.data[source_idx:source_idx+1].clone()
+            new_weight = torch.cat([router.proj.weight.data, source_row], dim=0)
+            router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False)
+            router.proj.weight = nn.Parameter(new_weight)
 
-                source_scale = router.per_expert_scale.data[source_idx:source_idx+1].clone()
-                router.per_expert_scale = nn.Parameter(
-                    torch.cat([router.per_expert_scale.data, source_scale], dim=0)
-                )
+            source_scale = router.per_expert_scale.data[source_idx:source_idx+1].clone()
+            router.per_expert_scale = nn.Parameter(
+                torch.cat([router.per_expert_scale.data, source_scale], dim=0)
+            )
 
-        if hasattr(self.config, "num_experts"):
-            self.config.num_experts += 1
-        new_idx = self.config.num_experts - 1
+        self.arch.num_experts += 1
+        self.arch.sync_config(self.config)
+        new_idx = self.arch.num_experts - 1
 
         if label:
             self.label_expert(new_idx, label)
@@ -72,9 +75,16 @@ class ExpertManager:
 
     def remove_expert(self, expert_idx, output_dir=None):
         """Remove an expert by slicing it out of the fused tensors and router."""
-        for layer in self.layers:
-            if not hasattr(layer, "experts"):
-                continue
+        if not 0 <= expert_idx < self.arch.num_experts:
+            raise IndexError(
+                f"expert_idx {expert_idx} out of range (num_experts={self.arch.num_experts})"
+            )
+        if self.arch.num_experts - 1 < self.arch.top_k:
+            raise ValueError(
+                f"Cannot remove: {self.arch.num_experts - 1} experts would be "
+                f"fewer than top_k={self.arch.top_k}"
+            )
+        for _, layer in iter_moe_layers(self.model):
             experts = layer.experts
 
             # Remove from fused tensors
@@ -89,22 +99,21 @@ class ExpertManager:
             experts.num_experts -= 1
 
             # Shrink router
-            if hasattr(layer, "router"):
-                router = layer.router
-                new_weight = torch.cat([
-                    router.proj.weight.data[:expert_idx],
-                    router.proj.weight.data[expert_idx+1:],
-                ], dim=0)
-                router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False)
-                router.proj.weight = nn.Parameter(new_weight)
+            router = layer.router
+            new_weight = torch.cat([
+                router.proj.weight.data[:expert_idx],
+                router.proj.weight.data[expert_idx+1:],
+            ], dim=0)
+            router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False)
+            router.proj.weight = nn.Parameter(new_weight)
 
-                router.per_expert_scale = nn.Parameter(torch.cat([
-                    router.per_expert_scale.data[:expert_idx],
-                    router.per_expert_scale.data[expert_idx+1:],
-                ], dim=0))
+            router.per_expert_scale = nn.Parameter(torch.cat([
+                router.per_expert_scale.data[:expert_idx],
+                router.per_expert_scale.data[expert_idx+1:],
+            ], dim=0))
 
-        if hasattr(self.config, "num_experts"):
-            self.config.num_experts -= 1
+        self.arch.num_experts -= 1
+        self.arch.sync_config(self.config)
 
         # Update labels (shift indices down)
         if hasattr(self.config, "expert_labels"):

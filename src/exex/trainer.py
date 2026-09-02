@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import Gemma4ForCausalLM
 
+from exex.arch import iter_moe_layers
 from exex.surgery import prepare_expert_for_training
 
 # Patch from_config onto Gemma4ForCausalLM if not present (uses _from_config internally)
@@ -88,9 +89,7 @@ class ExpertTrainer:
     def _snapshot_routers(self):
         """Clone router parameters as frozen reference for KL computation."""
         refs = []
-        for layer in self.model.model.layers:
-            if not hasattr(layer, "router"):
-                continue
+        for _, layer in iter_moe_layers(self.model):
             refs.append({
                 "proj_weight": layer.router.proj.weight.data.clone().detach(),
                 "scale": layer.router.scale.data.clone().detach(),
@@ -100,9 +99,7 @@ class ExpertTrainer:
 
     def _unfreeze_routers(self):
         """Unfreeze all router parameters for co-training."""
-        for layer in self.model.model.layers:
-            if not hasattr(layer, "router"):
-                continue
+        for _, layer in iter_moe_layers(self.model):
             for param in layer.router.parameters():
                 param.requires_grad_(True)
 
@@ -116,9 +113,7 @@ class ExpertTrainer:
         self._hooks = []
 
         router_idx = 0
-        for layer in self.model.model.layers:
-            if not hasattr(layer, "router"):
-                continue
+        for _, layer in iter_moe_layers(self.model):
             idx = router_idx  # capture for closure
 
             def hook_fn(module, args, output, _idx=idx):
@@ -140,9 +135,8 @@ class ExpertTrainer:
         total_kl = torch.tensor(0.0, device=device)
 
         router_idx = 0
-        for layer, ref in zip(self.model.model.layers, self._ref_router_params):
-            if not hasattr(layer, "router"):
-                continue
+        moe_layers = [layer for _, layer in iter_moe_layers(self.model)]
+        for layer, ref in zip(moe_layers, self._ref_router_params):
 
             if router_idx not in self._router_inputs:
                 router_idx += 1

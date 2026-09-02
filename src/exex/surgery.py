@@ -9,6 +9,8 @@ forward to route target experts through trainable views.
 import torch
 import torch.nn as nn
 
+from exex.arch import iter_moe_layers
+
 
 def prepare_expert_for_training(model, target_expert_indices):
     """
@@ -16,7 +18,7 @@ def prepare_expert_for_training(model, target_expert_indices):
     for the specified expert indices. Patches expert forward methods.
 
     Args:
-        model: Gemma4ForCausalLM model instance
+        model: MoE causal LM instance (Gemma 4 fused-tensor layout)
         target_expert_indices: list of int, which expert slots to make trainable
     """
     if isinstance(target_expert_indices, int):
@@ -27,11 +29,14 @@ def prepare_expert_for_training(model, target_expert_indices):
         param.requires_grad_(False)
 
     # For each MoE layer, create trainable views and patch forward
-    for layer in model.model.layers:
-        if not hasattr(layer, "experts"):
-            continue
-
+    for _, layer in iter_moe_layers(model):
         experts = layer.experts
+
+        for idx in target_expert_indices:
+            if not 0 <= idx < experts.num_experts:
+                raise IndexError(
+                    f"expert index {idx} out of range (num_experts={experts.num_experts})"
+                )
 
         for idx in target_expert_indices:
             # View into fused tensor — shares memory, no copy
