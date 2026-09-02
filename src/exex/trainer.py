@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from transformers import Gemma4ForCausalLM
 
 from exex.arch import iter_moe_layers
+from exex.backends import get_backend
 from exex.surgery import prepare_expert_for_training
 
 # Patch from_config onto Gemma4ForCausalLM if not present (uses _from_config internally)
@@ -42,7 +43,6 @@ class ExpertTrainer:
         router_lr_scale=0.1,
         backend="torch",
     ):
-        from exex.backends import get_backend
         self.backend = get_backend(backend) if isinstance(backend, str) else backend
         self.model = model
         self.target_expert_indices = (
