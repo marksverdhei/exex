@@ -1,0 +1,50 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+# Apptainer/Singularity image for exex on Hopper-class GPUs (H200 / GH200).
+# The NGC base is multi-arch: build on an x86_64 host for x86 nodes, or on an
+# aarch64 (Grace) node for GH200 — no cross-compilation needed.
+#
+#   apptainer build exex.sif containers/exex.def
+#
+# The baked-in exex is a snapshot of main. To run newer code without a
+# rebuild, bind your checkout and prepend it:
+#   apptainer exec --nv --bind /path/to/exex:/opt/exex-dev \
+#     --env PYTHONPATH=/opt/exex-dev/src exex.sif python ...
+
+%post
+    # NGC images pin package versions via pip constraint files; drop them
+    find / -name "constraint*.txt" -path "*/pip/*" -exec rm -f {} \; 2>/dev/null || true
+    rm -f /opt/pip-constraint*.txt 2>/dev/null || true
+    export PIP_CONSTRAINT=""
+
+    pip install --no-cache-dir --upgrade pip packaging wheel setuptools
+
+    # Gemma 4 needs transformers >= 5.5; keep NGC's CUDA-tuned torch
+    pip install --no-cache-dir \
+        'transformers>=5.5' \
+        'huggingface-hub>=1.0' \
+        safetensors \
+        datasets \
+        accelerate \
+        hf_transfer
+
+    git clone https://github.com/marksverdhei/exex.git /opt/exex
+    pip install --no-cache-dir --no-deps -e /opt/exex
+
+    # libcuda.so symlink for compat stacks
+    ln -sf /usr/local/cuda/compat/lib/libcuda.so.1 /usr/local/cuda/compat/lib/libcuda.so 2>/dev/null || true
+
+%test
+    python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)"
+    python3 -c "import transformers; print('transformers', transformers.__version__)"
+    python3 -c "from transformers.models.gemma4 import modeling_gemma4; print('gemma4 ok')"
+    python3 -c "import exex; print('exex ok:', sorted(exex.__all__))"
+
+%labels
+    org.opencontainers.image.title exex
+    org.opencontainers.image.source https://github.com/marksverdhei/exex
+
+%help
+    exex (expert exchange) runtime for Hopper GPUs.
+    Run: apptainer exec --nv exex.sif python /opt/exex/scripts/train_expert.py --help
