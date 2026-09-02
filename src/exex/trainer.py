@@ -40,7 +40,10 @@ class ExpertTrainer:
         kl_weight=0.1,
         lr=1e-4,
         router_lr_scale=0.1,
+        backend="torch",
     ):
+        from exex.backends import get_backend
+        self.backend = get_backend(backend) if isinstance(backend, str) else backend
         self.model = model
         self.target_expert_indices = (
             [target_expert_indices]
@@ -81,7 +84,7 @@ class ExpertTrainer:
             p for n, p in model.named_parameters()
             if p.requires_grad and "router" in n
         ]
-        self.optimizer = torch.optim.Adam([
+        self.optimizer = self.backend.create_optimizer([
             {"params": expert_params, "lr": lr},
             {"params": router_params, "lr": lr * router_lr_scale},
         ])
@@ -204,8 +207,7 @@ class ExpertTrainer:
         task_loss, kl_loss = self.compute_loss(input_ids, labels, **kwargs)
         total_loss = task_loss + self.kl_weight * kl_loss
 
-        total_loss.backward()
-        self.optimizer.step()
+        self.backend.backward_and_step(total_loss, self.optimizer)
 
         return {
             "task_loss": task_loss.item(),
