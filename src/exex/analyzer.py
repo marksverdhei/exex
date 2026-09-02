@@ -16,12 +16,13 @@ class RoutingAnalyzer:
             torch_dtype=torch.float16 if device == "cuda" else torch.float32
         )
         self.config = self.model.config
-        
-        # Determine architecture specific parameters
-        # Support common MoE config names
-        self.num_layers = getattr(self.config, "num_hidden_layers", 32)
-        self.num_experts = getattr(self.config, "num_local_experts", getattr(self.config, "n_routed_experts", 128))
-        self.top_k = getattr(self.config, "num_experts_per_tok", 8)
+
+        # Architecture parameters derived from the model itself
+        from exex.arch import MoEArch
+        self.arch = MoEArch.from_model(self.model)
+        self.num_layers = self.arch.num_layers
+        self.num_experts = self.arch.num_experts
+        self.top_k = self.arch.top_k
         
     @torch.no_grad()
     def analyze_dataset(self, dataset, text_col="text", domain_col="domain", max_samples_per_domain=100):
