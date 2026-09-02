@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "exex"
+version = "0.1.0"
+description = "Train, merge, prune and exchange MoE experts for Gemma 4"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "transformers>=5.0",
+    "safetensors",
+    "numpy",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+analysis = ["matplotlib", "seaborn", "pandas"]
+data = ["datasets"]
+dev = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/exex"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
