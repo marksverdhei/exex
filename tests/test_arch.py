@@ -33,6 +33,18 @@ class TestMoEArch:
         arch.sync_config(tiny_gemma4_moe.config)
         assert tiny_gemma4_moe.config.num_experts == 7
 
+    def test_multimodal_wrapper_layers_found(self, tiny_gemma4_moe):
+        """ConditionalGeneration-style wrappers nest layers under .language_model."""
+        class Wrapper:
+            pass
+        wrapper = Wrapper()
+        wrapper.model = Wrapper()
+        wrapper.model.language_model = tiny_gemma4_moe.model
+        wrapper.config = tiny_gemma4_moe.config
+        assert len(list(iter_moe_layers(wrapper))) == 2
+        arch = MoEArch.from_model(wrapper)
+        assert arch.num_experts == 4
+
     def test_non_moe_config_raises(self):
         class Dummy:
             num_hidden_layers = 2
