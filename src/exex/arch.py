@@ -113,6 +113,10 @@ class MoEArch:
 
 def _decoder_layers(model):
     inner = getattr(model, "model", model)
+    # Multimodal wrappers (e.g. Gemma4ForConditionalGeneration) nest the
+    # decoder under .language_model next to a vision tower.
+    if not hasattr(inner, "layers") and hasattr(inner, "language_model"):
+        inner = inner.language_model
     return inner.layers
 
 
