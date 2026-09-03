@@ -51,7 +51,10 @@ def main():
 
     print(f"Loading model from {args.model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.float16, device_map="cpu"
+        args.model_path, torch_dtype=torch.bfloat16, device_map="cpu",
+        # eager: fused grouped-GEMM asserts on unaligned per-expert token
+        # counts during no_grad calibration forwards
+        experts_implementation="eager",
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 

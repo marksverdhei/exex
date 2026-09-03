@@ -50,11 +50,16 @@ def main():
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--dtype", default="bfloat16",
                         choices=["bfloat16", "float16", "float32"])
+    parser.add_argument("--experts_impl", default="eager",
+                        help="MoE experts implementation; eager avoids fused "
+                             "grouped-GEMM kernels that assert on unaligned "
+                             "per-expert token counts under no_grad")
     parser.add_argument("--output", default=None, help="Write JSON result here")
     args = parser.parse_args()
 
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="auto"
+        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="auto",
+        experts_implementation=args.experts_impl,
     )
     model.eval()
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
