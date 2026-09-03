@@ -125,7 +125,11 @@ Only the trained expert views and router carry gradients and optimizer state; ev
 
 ## Status
 
-Core surgery, training, cartridges, merging and pruning are implemented and tested on tiny configs. Not yet validated end-to-end on real Gemma 4 26B hardware — see the [issue tracker](https://github.com/marksverdhei/exex/issues) for the roadmap (backends, deeper memory optimization, expansion training).
+**Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): training expert 42 for 500 steps on PubMedQA cut held-out domain perplexity by **11.3%** with general perplexity flat (−0.09% on wikitext-2), stable-to-rising router allocation for the trained expert, and KL ≈ 1e-4 throughout — no routing collapse. Details in [#10](https://github.com/marksverdhei/exex/issues/10). Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization).
+
+Inference note: the fused grouped-GEMM MoE kernel currently asserts on Hopper for `no_grad` forwards with unaligned per-expert token counts; eval/calibration CLIs default to `--experts_impl eager` ([#21](https://github.com/marksverdhei/exex/pull/21)).
+
+See the [issue tracker](https://github.com/marksverdhei/exex/issues) for the roadmap (backends, deeper memory optimization, expansion training).
 
 ## License
 
