@@ -50,6 +50,27 @@ def prepare_expert_for_training(model, target_expert_indices):
         experts.forward = _make_patched_forward(experts, target_expert_indices)
 
 
+def finalize_expert_training(model):
+    """
+    Remove trainable view parameters and restore the original expert forward.
+
+    The views share storage with the fused expert tensors, so all trained
+    updates are already present in the base weights; after finalizing, the
+    model has no aliased parameters and saves cleanly with safetensors.
+    """
+    for _, layer in iter_moe_layers(model):
+        experts = layer.experts
+        if not hasattr(experts, "_train_indices"):
+            continue
+        for idx in experts._train_indices:
+            for name in (f"_train_gate_up_{idx}", f"_train_down_{idx}"):
+                if hasattr(experts, name):
+                    delattr(experts, name)
+        del experts._train_indices
+        if "forward" in experts.__dict__:
+            del experts.forward  # fall back to the class forward
+
+
 def _make_patched_forward(experts_module, target_indices):
     """
     Create a patched forward that routes target experts through

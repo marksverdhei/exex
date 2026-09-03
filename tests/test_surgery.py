@@ -1,5 +1,41 @@
 import pytest
 import torch
+
+from exex.surgery import finalize_expert_training
+from exex.trainer import ExpertTrainer
+
+
+class TestFinalize:
+    def test_trained_weights_persist_and_save_works(
+        self, tiny_gemma4_moe, sample_batch, tmp_path
+    ):
+        trainer = ExpertTrainer(tiny_gemma4_moe, [1])
+        trainer.train_step(**sample_batch)
+        trained = tiny_gemma4_moe.model.layers[0].experts.gate_up_proj.data[1].clone()
+
+        trainer.finalize()
+
+        experts = tiny_gemma4_moe.model.layers[0].experts
+        # No aliased view params, patched forward removed
+        assert not hasattr(experts, "_train_gate_up_1")
+        assert not hasattr(experts, "_train_indices")
+        assert "forward" not in experts.__dict__
+        assert not any("_train_" in n for n, _ in tiny_gemma4_moe.named_parameters())
+        # Trained values live in the fused tensor
+        assert torch.equal(experts.gate_up_proj.data[1], trained)
+        # safetensors save no longer trips on shared tensors
+        tiny_gemma4_moe.save_pretrained(tmp_path)
+        assert (tmp_path / "model.safetensors").exists()
+        # Model still runs with the restored class forward
+        with torch.no_grad():
+            out = tiny_gemma4_moe(**sample_batch)
+        assert torch.isfinite(out.loss)
+
+    def test_finalize_idempotent(self, tiny_gemma4_moe):
+        from exex.surgery import prepare_expert_for_training
+        prepare_expert_for_training(tiny_gemma4_moe, [0])
+        finalize_expert_training(tiny_gemma4_moe)
+        finalize_expert_training(tiny_gemma4_moe)  # no-op second time
 from exex.surgery import prepare_expert_for_training
 
 

@@ -37,15 +37,20 @@ def main():
     parser.add_argument("--log_every", type=int, default=10)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--load_in_4bit", action="store_true")
+    parser.add_argument("--dtype", default="bfloat16",
+                        choices=["bfloat16", "float16", "float32"],
+                        help="Load dtype; bf16 default (fp16 overflows on "
+                             "natively-bf16 checkpoints)")
 
     args = parser.parse_args()
 
     # Load model
-    load_kwargs = {"torch_dtype": torch.float16, "device_map": "auto"}
+    dtype = getattr(torch, args.dtype)
+    load_kwargs = {"torch_dtype": dtype, "device_map": "auto"}
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16
+            load_in_4bit=True, bnb_4bit_compute_dtype=dtype
         )
 
     print(f"Loading model from {args.model_path}...")
@@ -113,7 +118,8 @@ def main():
         if step >= args.max_steps:
             break
 
-    # Save
+    # Save (finalize first: drops aliased view params so safetensors accepts)
+    trainer.finalize()
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"Saving to {args.output_dir}...")
     model.save_pretrained(args.output_dir)

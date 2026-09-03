@@ -13,7 +13,7 @@ from transformers import Gemma4ForCausalLM
 
 from exex.arch import iter_moe_layers
 from exex.backends import get_backend
-from exex.surgery import prepare_expert_for_training
+from exex.surgery import finalize_expert_training, prepare_expert_for_training
 
 # Patch from_config onto Gemma4ForCausalLM if not present (uses _from_config internally)
 if not hasattr(Gemma4ForCausalLM, "from_config"):
@@ -193,6 +193,19 @@ class ExpertTrainer:
         kl_loss = self._compute_kl_loss()
 
         return task_loss, kl_loss
+
+    def finalize(self):
+        """
+        End training: remove router hooks and the aliased view parameters.
+
+        Trained weights live in the fused tensors (views share storage), so
+        call this before save_pretrained — safetensors refuses aliased params.
+        """
+        for handle in self._hooks:
+            handle.remove()
+        self._hooks = []
+        self._router_inputs = {}
+        finalize_expert_training(self.model)
 
     def train_step(self, input_ids, labels, **kwargs):
         """
