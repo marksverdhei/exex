@@ -20,7 +20,10 @@ from exex.pruner import (
 
 def calibration_batches(dataset_name, tokenizer, text_column, max_samples, max_length):
     from datasets import load_dataset
-    dataset = load_dataset(dataset_name, split="train")
+    if os.path.isfile(dataset_name):
+        dataset = load_dataset("json", data_files=dataset_name, split="train")
+    else:
+        dataset = load_dataset(dataset_name, split="train")
     for i in range(min(max_samples, len(dataset))):
         yield tokenizer(
             dataset[i][text_column], return_tensors="pt",

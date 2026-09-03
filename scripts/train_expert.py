@@ -69,9 +69,12 @@ def main():
         router_lr_scale=args.router_lr_scale,
     )
 
-    # Load dataset
+    # Load dataset (local json/jsonl file or HF dataset name)
     print(f"Loading dataset {args.dataset}...")
-    dataset = load_dataset(args.dataset, split="train")
+    if os.path.isfile(args.dataset):
+        dataset = load_dataset("json", data_files=args.dataset, split="train")
+    else:
+        dataset = load_dataset(args.dataset, split="train")
 
     # Training loop
     print(f"Training experts {expert_indices} for {args.max_steps} steps...")
