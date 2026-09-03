@@ -162,8 +162,10 @@ class ExpertTrainer:
                     ref["proj_weight"].to(device),
                 )
 
-            current_log_probs = F.log_softmax(current_logits, dim=-1)
-            ref_probs = F.softmax(ref_logits, dim=-1)
+            # fp32 for the divergence itself: at KL ~ 0 (early training),
+            # bf16/fp16 rounding yields small negative values
+            current_log_probs = F.log_softmax(current_logits.float(), dim=-1)
+            ref_probs = F.softmax(ref_logits.float(), dim=-1)
 
             kl = F.kl_div(current_log_probs, ref_probs, reduction="batchmean")
             total_kl = total_kl + kl

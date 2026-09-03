@@ -1,5 +1,15 @@
 import pytest
 import torch
+
+
+class TestKLNumerics:
+    def test_kl_nonnegative_in_half_precision(self, tiny_gemma4_moe, sample_batch):
+        from exex.trainer import ExpertTrainer
+        model = tiny_gemma4_moe.to(torch.bfloat16)
+        trainer = ExpertTrainer(model, [1])
+        _, kl_loss = trainer.compute_loss(**sample_batch)
+        assert kl_loss.item() >= 0.0
+        assert torch.isfinite(kl_loss)
 from exex.trainer import ExpertTrainer
 
 
