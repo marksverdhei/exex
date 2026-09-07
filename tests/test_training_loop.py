@@ -75,3 +75,19 @@ class TestCartridgeLoading:
             assert torch.equal(layer.experts.gate_up_proj.data[2],
                                donor.model.layers[0].experts.gate_up_proj.data[2]) or True
         assert install_cartridges(copy.deepcopy(base), [f"{path}:e2:new"]) == [4]
+
+
+class TestTopKOverride:
+    def test_set_top_k_changes_active_experts(self, tiny_gemma4_moe, sample_batch):
+        from exex.loading import set_top_k
+        from exex.pruner import collect_router_stats
+
+        model = tiny_gemma4_moe.eval()
+        batches = [{"input_ids": sample_batch["input_ids"]}]
+        s2 = collect_router_stats(model, batches)
+        assert set_top_k(model, 3) == 2
+        s3 = collect_router_stats(model, batches)
+        # every token selects exactly k experts per layer
+        assert torch.allclose(s2.counts.sum(dim=1), torch.full((2,), 2.0 * s2.tokens))
+        assert torch.allclose(s3.counts.sum(dim=1), torch.full((2,), 3.0 * s3.tokens))
+        assert model.config.top_k_experts == 3

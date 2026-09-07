@@ -28,11 +28,14 @@ def main():
                              "per-expert token counts under no_grad")
     parser.add_argument("--cartridge", action="append", default=[],
                         help="Install before eval: path[:expert[:target_index|new]]; repeatable")
+    parser.add_argument("--top_k", type=int, default=None,
+                        help="Override active experts per token at eval (A4B -> AxB knob)")
     parser.add_argument("--output", default=None, help="Write JSON result here")
     args = parser.parse_args()
 
     model, tokenizer = load_model(args.model_path, dtype=args.dtype,
-                                  experts_impl=args.experts_impl, cartridges=args.cartridge)
+                                  experts_impl=args.experts_impl, cartridges=args.cartridge,
+                                  top_k=args.top_k)
 
     from datasets import load_dataset
     if os.path.isfile(args.dataset):
@@ -53,6 +56,7 @@ def main():
     result = {
         "model": args.model_path,
         "cartridges": args.cartridge,
+        "top_k": args.top_k,
         "dataset": args.dataset,
         "tokens": stats.tokens,
         "num_experts": arch.num_experts,

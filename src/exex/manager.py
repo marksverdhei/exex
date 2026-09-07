@@ -40,29 +40,31 @@ class ExpertManager:
             )
         for _, layer in iter_moe_layers(self.model):
             experts = layer.experts
+            router = layer.router
 
-            # Expand fused expert tensors
-            source_gate_up = experts.gate_up_proj.data[source_idx:source_idx+1].clone()
-            experts.gate_up_proj = nn.Parameter(
-                torch.cat([experts.gate_up_proj.data, source_gate_up], dim=0)
-            )
-            source_down = experts.down_proj.data[source_idx:source_idx+1].clone()
-            experts.down_proj = nn.Parameter(
-                torch.cat([experts.down_proj.data, source_down], dim=0)
-            )
+            # Grow each fused tensor by one slot. Allocate the new tensor,
+            # copy, drop the old one and release its cached CUDA blocks
+            # before the next layer: with the old cat() pattern every freed
+            # block was too small to be reused, so reserved memory doubled
+            # (89 GB vs 68 GB at 26B, job 2175641).
+            def grown(param):
+                old = param.data
+                new = old.new_empty((old.shape[0] + 1, *old.shape[1:]))
+                new[:-1].copy_(old)
+                new[-1].copy_(old[source_idx])
+                return nn.Parameter(new, requires_grad=param.requires_grad)
+
+            experts.gate_up_proj = grown(experts.gate_up_proj)
+            experts.down_proj = grown(experts.down_proj)
             experts.num_experts += 1
 
-            # Expand router
-            router = layer.router
-            source_row = router.proj.weight.data[source_idx:source_idx+1].clone()
-            new_weight = torch.cat([router.proj.weight.data, source_row], dim=0)
-            router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False)
-            router.proj.weight = nn.Parameter(new_weight)
-
-            source_scale = router.per_expert_scale.data[source_idx:source_idx+1].clone()
-            router.per_expert_scale = nn.Parameter(
-                torch.cat([router.per_expert_scale.data, source_scale], dim=0)
-            )
+            new_weight = grown(router.proj.weight)
+            router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False,
+                                    device="meta")
+            router.proj.weight = new_weight
+            router.per_expert_scale = grown(router.per_expert_scale)
+            if torch.cuda.is_available() and new_weight.is_cuda:
+                torch.cuda.empty_cache()
 
         self.arch.num_experts += 1
         self.arch.sync_config(self.config)
