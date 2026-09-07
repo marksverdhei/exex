@@ -377,3 +377,16 @@ def test_script_shims_import_cli_main(shim, module):
     import importlib
 
     assert mod.main is importlib.import_module(f"exex.cli.{module}").main
+
+
+
+def test_train_with_top_k_override(ws, tiny_model_dir, jsonl_path):
+    out = ws / "run_topk"
+    train.main([
+        "--model_path", tiny_model_dir, "--dataset", jsonl_path,
+        "--expert_indices", "1", "--top_k", "3", "--output_dir", str(out), *TRAIN_ARGS,
+    ])
+    run = _read_json(os.path.join(out, "run.json"))
+    assert run["top_k"] == 3
+    assert _read_json(os.path.join(out, "config.json"))["top_k_experts"] == 3
+    _rm(out)
