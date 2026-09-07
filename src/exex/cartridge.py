@@ -21,7 +21,6 @@ JSON-encoded) carries:
 
 import json
 
-import torch
 from safetensors.torch import save_file, load_file
 
 from exex.arch import MoEArch, iter_moe_layers

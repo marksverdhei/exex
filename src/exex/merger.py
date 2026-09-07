@@ -5,7 +5,6 @@ Supports transplanting into an existing slot (with optional alpha blending
 against the incumbent weights) or growing a fresh slot via ExpertManager.
 """
 
-import torch
 
 from exex.arch import MoEArch, iter_moe_layers
 from exex.cartridge import Cartridge, load_cartridge
