@@ -22,6 +22,10 @@ def main():
     parser.add_argument("--labels", default=None,
                         help='JSON dict {"name": ["label", ...]}')
     parser.add_argument("--output", required=True, help="Cartridge .safetensors path")
+    parser.add_argument("--dtype", default="bfloat16",
+                        choices=["bfloat16", "float16", "float32"],
+                        help="Load dtype; bf16 default matches native Gemma 4 "
+                             "checkpoints (fp16 casts lose precision / overflow)")
     args = parser.parse_args()
 
     try:
@@ -32,7 +36,7 @@ def main():
 
     print(f"Loading model from {args.model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.float16, device_map="cpu"
+        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="cpu"
     )
     cart = save_cartridge(
         model, experts, args.output, source_model=args.model_path, labels=labels
