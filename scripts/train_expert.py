@@ -10,7 +10,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
-from tqdm import tqdm
 
 from exex.trainer import ExpertTrainer
 from exex.manager import ExpertManager
@@ -101,9 +100,13 @@ def main():
                 padding=True,
             ).to(model.device)
 
+            # Pad positions must not contribute loss terms nor be attended to.
             labels = encodings.input_ids.clone()
+            labels[encodings.attention_mask == 0] = -100
             metrics = trainer.train_step(
-                input_ids=encodings.input_ids, labels=labels
+                input_ids=encodings.input_ids,
+                attention_mask=encodings.attention_mask,
+                labels=labels,
             )
 
             step += 1
