@@ -138,7 +138,9 @@ Only the trained expert views and router carry gradients and optimizer state; ev
 
 ## Status
 
-**Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): training expert 42 for 500 steps on PubMedQA cut held-out domain perplexity by **11.3%** with general perplexity flat (−0.09% on wikitext-2), stable-to-rising router allocation for the trained expert, and KL ≈ 1e-4 throughout — no routing collapse. Details in [#10](https://github.com/marksverdhei/exex/issues/10). Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization). The extracted cartridge (341 MB) reproduces the trained checkpoint's expert tensors bit-exactly, and merging it into a fresh base reproduces its perplexity (4.7034 vs 4.7028). Caveat: train and eval there share one QA template; format-vs-domain controls are in progress.
+**Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): the toolkit trains one expert in place, saves it as a 341 MB cartridge that reproduces the checkpoint bit-exactly, merges it into a fresh base, grows a 129th slot, and evaluates — all in one GPU-hour. Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization). Details in [#10](https://github.com/marksverdhei/exex/issues/10).
+
+**What the first experiment did *not* show.** Training expert 42 for 500 steps on templated PubMedQA cut held-out perplexity on the *same template* by 11 % — but controls run afterwards showed the same model gains 7 % on non-medical SQuAD in that template and **0 %** on raw PubMed abstracts. The gain was format learning, not medical knowledge. Any domain claim for this method needs raw-text held-out evals; those runs are in progress. Numbers from before 2026-09-07 also predate the pad-token loss fix (#25) and router-row freeze (#26).
 
 A candid state-of-the-repo audit lives in [`docs/AUDIT-2026-09-07.md`](docs/AUDIT-2026-09-07.md).
 
