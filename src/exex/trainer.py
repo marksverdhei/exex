@@ -167,9 +167,7 @@ class ExpertTrainer:
         self._router_inputs = {}
         self._hooks = []
 
-        router_idx = 0
-        for _, layer in iter_moe_layers(self.model):
-            idx = router_idx  # capture for closure
+        for idx, (_, layer) in enumerate(iter_moe_layers(self.model)):
 
             def hook_fn(module, args, output, _idx=idx):
                 # args[0] is the hidden_states input to the router
@@ -177,7 +175,6 @@ class ExpertTrainer:
 
             handle = layer.router.register_forward_hook(hook_fn)
             self._hooks.append(handle)
-            router_idx += 1
 
     def _compute_kl_loss(self):
         """
