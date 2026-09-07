@@ -23,7 +23,7 @@ All architecture parameters (expert count, active experts per token, MoE dimensi
 
 `prepare_expert_for_training` freezes the whole model, then creates trainable `nn.Parameter` **views** into the fused 3D expert tensors — zero weight duplication — and patches the expert forward so only target experts route through trainable parameters. A single expert's matrices are small, so full-rank training of them is cheap; LoRA is unnecessary at this granularity.
 
-`ExpertTrainer` co-trains the selected experts **and the router**, regularized by KL divergence against a snapshot of the pretrained router to prevent routing collapse. Router inputs are captured by forward hooks, so the KL term uses exactly what the router saw.
+`ExpertTrainer` co-trains the selected experts **and their router rows**, regularized by KL divergence against a snapshot of the pretrained router to prevent routing collapse. Router inputs are captured by forward hooks, so the KL term uses exactly what the router saw. Only the target experts' router rows and per-expert scales train by default; the shared router scale and every other row stay frozen, so a trained expert is *exactly* its cartridge (`--train_full_router` opts out and makes cartridges approximate).
 
 ### Cartridges: the exchange format
 
@@ -46,11 +46,24 @@ pip install -e .[analysis]  # + plots for the routing analyzer
 python scripts/train_expert.py \
   --model_path google/gemma-4-26B-A4B \
   --dataset your/domain-dataset \
-  --expert_indices 42 \
-  --output_dir ./checkpoints/domain_expert
+  --expert_indices 42 --label medical \
+  --max_steps 500 --batch_size 2 --grad_accum 4 \
+  --eval_dataset heldout.jsonl --eval_every 100 \
+  --output_dir ./runs/medical
 ```
 
-Use `--clone_from N` to grow a fresh slot cloned from expert N and train that instead of overwriting a pretrained expert.
+The run directory gets `cartridge.safetensors` (the trained expert + its router row, ~340 MB at 26B), `metrics.jsonl` (loss, KL, lr, grad norm, periodic held-out perplexity) and `run.json`. The full model is only written with `--save_full_model`. Use `--clone_from N` instead of `--expert_indices` to grow a fresh slot cloned from expert N and train that (expert extension). Other knobs: `--warmup_steps`, `--lr_decay {linear,cosine}`, `--max_grad_norm`, `--seed`, `--kl_weight`.
+
+### Evaluate base + cartridge without merging to disk
+
+```bash
+python scripts/eval_perplexity.py --model_path google/gemma-4-26B-A4B \
+  --cartridge ./runs/medical/cartridge.safetensors --dataset heldout.jsonl
+python scripts/router_stats.py --model_path google/gemma-4-26B-A4B \
+  --cartridge ./runs/medical/cartridge.safetensors:medical:new --dataset heldout.jsonl
+```
+
+`--cartridge path[:expert[:target_index|new]]` installs in memory before the forward passes; the target defaults to the expert's original slot, `new` grows one.
 
 ### Extract experts into a cartridge
 
@@ -94,7 +107,7 @@ python scripts/prune_experts.py \
 
 Strategies: `utilisation` (routing frequency), `magnitude` (weight norm), `reap` (router gate mass × weight norm, after [arXiv:2510.13999](https://arxiv.org/abs/2510.13999)). `--mode zero` zeroes weights in place for sparse runtimes instead of shrinking the model.
 
-### Analyze routing
+### Analyze routing (currently broken on transformers 5 — see #27)
 
 ```bash
 python scripts/run_analysis.py --model_path ... --dataset_path your/multidomain-data
@@ -125,7 +138,9 @@ Only the trained expert views and router carry gradients and optimizer state; ev
 
 ## Status
 
-**Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): training expert 42 for 500 steps on PubMedQA cut held-out domain perplexity by **11.3%** with general perplexity flat (−0.09% on wikitext-2), stable-to-rising router allocation for the trained expert, and KL ≈ 1e-4 throughout — no routing collapse. Details in [#10](https://github.com/marksverdhei/exex/issues/10). Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization).
+**Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): training expert 42 for 500 steps on PubMedQA cut held-out domain perplexity by **11.3%** with general perplexity flat (−0.09% on wikitext-2), stable-to-rising router allocation for the trained expert, and KL ≈ 1e-4 throughout — no routing collapse. Details in [#10](https://github.com/marksverdhei/exex/issues/10). Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization). The extracted cartridge (341 MB) reproduces the trained checkpoint's expert tensors bit-exactly, and merging it into a fresh base reproduces its perplexity (4.7034 vs 4.7028). Caveat: train and eval there share one QA template; format-vs-domain controls are in progress.
+
+A candid state-of-the-repo audit lives in [`docs/AUDIT-2026-09-07.md`](docs/AUDIT-2026-09-07.md). Known broken: the routing analyzer (`run_analysis.py`, [#27](https://github.com/marksverdhei/exex/issues/27)).
 
 Inference note: the fused grouped-GEMM MoE kernel currently asserts on Hopper for `no_grad` forwards with unaligned per-expert token counts; eval/calibration CLIs default to `--experts_impl eager` ([#21](https://github.com/marksverdhei/exex/pull/21)).
 
