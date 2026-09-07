@@ -107,11 +107,11 @@ python scripts/prune_experts.py \
 
 Strategies: `utilisation` (routing frequency), `magnitude` (weight norm), `reap` (Router-weighted Expert Activation Pruning, [arXiv:2510.13999](https://arxiv.org/abs/2510.13999): mean over routed calibration tokens of router weight × L2 norm of the expert's output), `gate_weight_norm` (the cheaper router gate mass × weight norm proxy that was previously labelled `reap`). `--mode zero` zeroes weights in place for sparse runtimes instead of shrinking the model.
 
-### Analyze routing (currently broken on transformers 5 — see #27)
+### Analyze routing
 
 ```bash
 python scripts/run_analysis.py --model_path ... --dataset_path your/multidomain-data
-python scripts/generate_report.py --model_path ... --output_dir report/
+python scripts/generate_report.py --model_path ... --output_dir report/   # or --model_path mock
 ```
 
 Produces expert–domain activation maps, co-occurrence heatmaps, cross-layer expert pipelines, and suggested expert labels.
@@ -140,7 +140,7 @@ Only the trained expert views and router carry gradients and optimizer state; ev
 
 **Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): training expert 42 for 500 steps on PubMedQA cut held-out domain perplexity by **11.3%** with general perplexity flat (−0.09% on wikitext-2), stable-to-rising router allocation for the trained expert, and KL ≈ 1e-4 throughout — no routing collapse. Details in [#10](https://github.com/marksverdhei/exex/issues/10). Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization). The extracted cartridge (341 MB) reproduces the trained checkpoint's expert tensors bit-exactly, and merging it into a fresh base reproduces its perplexity (4.7034 vs 4.7028). Caveat: train and eval there share one QA template; format-vs-domain controls are in progress.
 
-A candid state-of-the-repo audit lives in [`docs/AUDIT-2026-09-07.md`](docs/AUDIT-2026-09-07.md). Known broken: the routing analyzer (`run_analysis.py`, [#27](https://github.com/marksverdhei/exex/issues/27)).
+A candid state-of-the-repo audit lives in [`docs/AUDIT-2026-09-07.md`](docs/AUDIT-2026-09-07.md).
 
 Inference note: the fused grouped-GEMM MoE kernel currently asserts on Hopper for `no_grad` forwards with unaligned per-expert token counts; eval/calibration CLIs default to `--experts_impl eager` ([#21](https://github.com/marksverdhei/exex/pull/21)).
 

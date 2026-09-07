@@ -6,6 +6,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 from exex.analyzer import RoutingAnalyzer
 
+
 def create_dummy_dataset():
     """
     Creates a small mock dataset for testing purposes if a real dataset isn't provided.
@@ -22,15 +23,18 @@ def create_dummy_dataset():
         {"text": "El tiempo vuela como una flecha. La mosca de la fruta vuela como un plátano.", "domain": "multilingual"},
     ] * 10  # Multiply to have more samples
 
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze MoE routing behavior across domains.")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the MoE model (local or HF hub)")
     parser.add_argument("--dataset_path", type=str, default=None, help="Path to HF dataset. Uses dummy data if not provided.")
     parser.add_argument("--max_samples", type=int, default=50, help="Max samples per domain to analyze")
+    parser.add_argument("--device", type=str, default=None, help="Device override (default: cuda if available)")
+    parser.add_argument("--max_length", type=int, default=512, help="Truncation length per sample")
 
     args = parser.parse_args()
 
-    analyzer = RoutingAnalyzer(args.model_path)
+    analyzer = RoutingAnalyzer(args.model_path, device=args.device, max_length=args.max_length)
 
     if args.dataset_path:
         from datasets import load_dataset
@@ -49,6 +53,7 @@ def main():
 
     analyzer.print_associations(results)
     analyzer.find_correlations(results, threshold_ratio=0.75)
+
 
 if __name__ == "__main__":
     main()
