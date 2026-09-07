@@ -7,19 +7,16 @@ prevent routing collapse.
 """
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from transformers import Gemma4ForCausalLM
 
 from exex.arch import iter_moe_layers
 from exex.backends import get_backend
-from exex.surgery import finalize_expert_training, prepare_expert_for_training
-
-# Patch from_config onto Gemma4ForCausalLM if not present (uses _from_config internally)
-if not hasattr(Gemma4ForCausalLM, "from_config"):
-    Gemma4ForCausalLM.from_config = classmethod(
-        lambda cls, config, **kwargs: cls._from_config(config, **kwargs)
-    )
+from exex.surgery import (
+    composed_router_params,
+    finalize_expert_training,
+    prepare_expert_for_training,
+    prepare_router_rows_for_training,
+)
 
 
 class ExpertTrainer:
@@ -32,6 +29,10 @@ class ExpertTrainer:
         kl_weight: weight for KL divergence regularization on the router
         lr: learning rate
         router_lr_scale: router learning rate = lr * router_lr_scale
+        train_full_router: if False (default) only the target experts' router
+            rows and per-expert scales train, so a cartridge reproduces the
+            trained model exactly. If True every router parameter trains
+            (shared ``scale``, all rows); cartridges then become approximate.
     """
 
     def __init__(
@@ -42,6 +43,7 @@ class ExpertTrainer:
         lr=1e-4,
         router_lr_scale=0.1,
         backend="torch",
+        train_full_router=False,
     ):
         self.backend = get_backend(backend) if isinstance(backend, str) else backend
         self.model = model
@@ -51,6 +53,7 @@ class ExpertTrainer:
             else target_expert_indices
         )
         self.kl_weight = kl_weight
+        self.train_full_router = train_full_router
 
         # Step 1: Snapshot pretrained router for KL reference (before any freezing)
         self._ref_router_params = self._snapshot_routers()
@@ -58,8 +61,11 @@ class ExpertTrainer:
         # Step 2: Prepare model (freeze all, create expert views, patch forward)
         prepare_expert_for_training(model, self.target_expert_indices)
 
-        # Step 3: Unfreeze router parameters
-        self._unfreeze_routers()
+        # Step 3: Make router trainable — target rows only, or everything
+        if train_full_router:
+            self._unfreeze_routers()
+        else:
+            prepare_router_rows_for_training(model, self.target_expert_indices)
 
         # Step 4: Install forward hooks to capture router inputs for KL
         self._install_router_hooks()
@@ -78,7 +84,7 @@ class ExpertTrainer:
         # Step 6: Build optimizer with param groups
         expert_params = [
             p for n, p in model.named_parameters()
-            if p.requires_grad and "_train_" in n
+            if p.requires_grad and "_train_" in n and "router" not in n
         ]
         router_params = [
             p for n, p in model.named_parameters()
@@ -139,7 +145,7 @@ class ExpertTrainer:
 
         router_idx = 0
         moe_layers = [layer for _, layer in iter_moe_layers(self.model)]
-        for layer, ref in zip(moe_layers, self._ref_router_params):
+        for layer, ref in zip(moe_layers, self._ref_router_params, strict=True):
 
             if router_idx not in self._router_inputs:
                 router_idx += 1
@@ -151,9 +157,10 @@ class ExpertTrainer:
             router = layer.router
 
             # Current router logits (recompute — these are in the grad graph)
+            weight, _ = composed_router_params(router)
             normed = router.norm(hs_flat)
             scaled = normed * router.scale * router.scalar_root_size
-            current_logits = router.proj(scaled)
+            current_logits = F.linear(scaled, weight)
 
             # Reference router logits (using frozen snapshot, no grad)
             with torch.no_grad():
@@ -168,7 +175,7 @@ class ExpertTrainer:
             ref_probs = F.softmax(ref_logits.float(), dim=-1)
 
             kl = F.kl_div(current_log_probs, ref_probs, reduction="batchmean")
-            total_kl = total_kl + kl
+            total_kl = total_kl + kl.clamp_min(0.0)
             router_idx += 1
 
         return total_kl / max(len(self._ref_router_params), 1)

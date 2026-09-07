@@ -50,6 +50,67 @@ def prepare_expert_for_training(model, target_expert_indices):
         experts.forward = _make_patched_forward(experts, target_expert_indices)
 
 
+def prepare_router_rows_for_training(model, target_expert_indices):
+    """Make only the target experts' router rows trainable.
+
+    For every MoE layer, creates trainable view parameters into
+    ``router.proj.weight[idx]`` and ``router.per_expert_scale[idx]`` (shared
+    storage, no copy) and patches the router forward to compose the frozen
+    weight with those views. ``router.scale`` and every other row stay frozen,
+    so the trained delta is exactly what a cartridge carries (exex#26).
+    """
+    if isinstance(target_expert_indices, int):
+        target_expert_indices = [target_expert_indices]
+    for _, layer in iter_moe_layers(model):
+        router = layer.router
+        for param in router.parameters():
+            param.requires_grad_(False)
+        for idx in target_expert_indices:
+            setattr(router, f"_router_row_{idx}",
+                    nn.Parameter(router.proj.weight.data[idx]))
+            setattr(router, f"_router_scale_{idx}",
+                    nn.Parameter(router.per_expert_scale.data[idx]))
+        router._train_indices = set(target_expert_indices)
+        router.forward = _make_patched_router_forward(router, target_expert_indices)
+
+
+def composed_router_params(router):
+    """Return (proj_weight, per_expert_scale) with trainable rows spliced in.
+
+    Falls back to the raw parameters when the router is not row-patched, so
+    callers (forward, KL) can use it unconditionally.
+    """
+    indices = sorted(getattr(router, "_train_indices", ()))
+    weight = router.proj.weight
+    scale = router.per_expert_scale
+    if not indices:
+        return weight, scale
+    idx = torch.tensor(indices, device=weight.device)
+    rows = torch.stack([getattr(router, f"_router_row_{i}") for i in indices])
+    scales = torch.stack([getattr(router, f"_router_scale_{i}") for i in indices])
+    return weight.index_copy(0, idx, rows), scale.index_copy(0, idx, scales)
+
+
+def _make_patched_router_forward(router, target_indices):
+    """Router forward (Gemma 4 layout) using the composed trainable rows."""
+    top_k = router.config.top_k_experts
+
+    def patched_forward(hidden_states):
+        weight, per_expert_scale = composed_router_params(router)
+        hidden_states = router.norm(hidden_states)
+        hidden_states = hidden_states * router.scale * router.scalar_root_size
+        expert_scores = nn.functional.linear(hidden_states, weight)
+        router_probabilities = nn.functional.softmax(
+            expert_scores, dim=-1, dtype=torch.float32
+        )
+        top_k_weights, top_k_index = torch.topk(router_probabilities, k=top_k, dim=-1)
+        top_k_weights = top_k_weights / top_k_weights.sum(dim=-1, keepdim=True)
+        top_k_weights = top_k_weights * per_expert_scale[top_k_index]
+        return router_probabilities, top_k_weights, top_k_index
+
+    return patched_forward
+
+
 def finalize_expert_training(model):
     """
     Remove trainable view parameters and restore the original expert forward.
@@ -69,6 +130,17 @@ def finalize_expert_training(model):
         del experts._train_indices
         if "forward" in experts.__dict__:
             del experts.forward  # fall back to the class forward
+    for _, layer in iter_moe_layers(model):
+        router = layer.router
+        if not hasattr(router, "_train_indices"):
+            continue
+        for idx in router._train_indices:
+            for name in (f"_router_row_{idx}", f"_router_scale_{idx}"):
+                if hasattr(router, name):
+                    delattr(router, name)
+        del router._train_indices
+        if "forward" in router.__dict__:
+            del router.forward
 
 
 def _make_patched_forward(experts_module, target_indices):
