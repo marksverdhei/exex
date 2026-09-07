@@ -32,6 +32,10 @@ def main():
     parser.add_argument("--kl_weight", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--router_lr_scale", type=float, default=0.1)
+    parser.add_argument("--train_full_router", action="store_true",
+                        help="Train every router parameter (shared scale, all "
+                             "rows). Default trains only the target experts' "
+                             "rows so cartridges stay exact.")
     parser.add_argument("--max_steps", type=int, default=1000)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--max_length", type=int, default=512)
@@ -75,6 +79,7 @@ def main():
         kl_weight=args.kl_weight,
         lr=args.lr,
         router_lr_scale=args.router_lr_scale,
+        train_full_router=args.train_full_router,
     )
 
     # Load dataset (local json/jsonl file or HF dataset name)

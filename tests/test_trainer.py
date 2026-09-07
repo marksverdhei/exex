@@ -94,7 +94,7 @@ class TestExpertTrainer:
         )
         trainer_high = ExpertTrainer(
             # Need a fresh model for fair comparison
-            model=type(tiny_gemma4_moe).from_config(tiny_gemma4_moe.config),
+            model=type(tiny_gemma4_moe)(tiny_gemma4_moe.config),
             target_expert_indices=[1],
             kl_weight=100.0,
             lr=0.01,
