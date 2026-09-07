@@ -38,6 +38,11 @@ pip install -e .            # core
 pip install -e .[analysis]  # + plots for the routing analyzer
 ```
 
+Installing also puts the CLIs on your `PATH` as console scripts: `exex-train`,
+`exex-eval`, `exex-router-stats`, `exex-extract`, `exex-merge`, `exex-prune`,
+`exex-manage`, `exex-analyze`, `exex-report`. The `python scripts/*.py` forms
+below keep working (they are thin shims over `exex.cli`).
+
 ## Quickstart
 
 ### Train an expert
@@ -127,8 +132,9 @@ src/exex/
 ├── cartridge.py  # Expert cartridge format v0
 ├── merger.py     # Install cartridge experts: replace, blend, grow
 ├── pruner.py     # Calibration stats, scoring, remove/zero pruning
-└── analyzer.py   # Router behavior analysis
-scripts/          # CLIs for each of the above
+├── analyzer.py   # Router behavior analysis
+└── cli/          # One module per CLI, each exposing main(argv=None) (exex-* entry points)
+scripts/          # Thin shims over exex.cli for running from a checkout
 tests/            # CPU-only suite on a tiny Gemma 4 MoE config
 ```
 

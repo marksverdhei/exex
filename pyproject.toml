@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "exex"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Train, merge, prune and exchange MoE experts for Gemma 4"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -15,12 +15,26 @@ dependencies = [
     "safetensors",
     "numpy",
     "tqdm",
+    "datasets",
 ]
 
 [project.optional-dependencies]
 analysis = ["matplotlib", "seaborn", "pandas"]
-data = ["datasets"]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "tokenizers"]
+
+[project.scripts]
+exex-train = "exex.cli.train:main"
+exex-eval = "exex.cli.evaluate:main"
+exex-router-stats = "exex.cli.router_stats:main"
+exex-extract = "exex.cli.extract:main"
+exex-merge = "exex.cli.merge:main"
+exex-prune = "exex.cli.prune:main"
+exex-manage = "exex.cli.manage:main"
+exex-analyze = "exex.cli.analyze:main"
+exex-report = "exex.cli.report:main"
+
+[tool.hatch.version]
+path = "src/exex/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/exex"]
@@ -31,7 +45,6 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["scripts/generate_report.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "UP", "SIM"]
@@ -39,3 +52,4 @@ ignore = ["E501", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402", "B007", "B017"]
+"src/exex/__init__.py" = ["E402"]
