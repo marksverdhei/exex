@@ -58,6 +58,14 @@ def build_parser():
     p.add_argument("--lr_decay", default="none", choices=["none", "linear", "cosine"])
     p.add_argument("--weight_decay", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--attention_mask", default="off", choices=["on", "off"],
+                   help="Pass the padding attention mask to the model. Off by default: "
+                        "with right padding the causal mask already keeps real tokens "
+                        "correct, and Gemma 4 bf16 forwards with a mask produced "
+                        "non-finite pad-row activations that poisoned expert grads "
+                        "(26B, 2026-09-07). Pad labels are always -100 either way.")
+    p.add_argument("--allow_nonfinite", action="store_true",
+                   help="Skip non-finite steps instead of aborting the run")
     p.add_argument("--no_shuffle", action="store_true",
                    help="Iterate the dataset in file order instead of a seeded shuffle")
     # periodic eval
@@ -124,6 +132,7 @@ def main(argv=None):
         total_steps=args.max_steps,
         lr_decay=args.lr_decay,
         weight_decay=args.weight_decay,
+        abort_on_nonfinite=not args.allow_nonfinite,
     )
     n_trainable = sum(p.numel() for p in trainer.trainable_parameters)
 
@@ -172,8 +181,10 @@ def main(argv=None):
                             max_length=args.max_length, padding=True).to(model.device)
             labels = enc.input_ids.clone()
             labels[enc.attention_mask == 0] = -100
-            m = trainer.train_step(input_ids=enc.input_ids,
-                                   attention_mask=enc.attention_mask, labels=labels)
+            step_kwargs = {"input_ids": enc.input_ids, "labels": labels}
+            if args.attention_mask == "on":
+                step_kwargs["attention_mask"] = enc.attention_mask
+            m = trainer.train_step(**step_kwargs)
             tokens_seen += int(enc.attention_mask.sum())
             if not m["stepped"]:
                 continue
@@ -217,6 +228,7 @@ def main(argv=None):
     run = {"args": vars(args), "expert_indices": expert_indices,
            "num_experts": manager.arch.num_experts, "trainable_params": n_trainable,
            "optimizer_steps": step, "tokens_seen": tokens_seen,
+           "nonfinite_steps": trainer.nonfinite_steps,
            "elapsed_s": round(time.time() - t0, 1), "eval_ppl_history": eval_history,
            "artefacts": artefacts}
     with open(os.path.join(args.output_dir, "run.json"), "w") as f:
