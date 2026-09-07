@@ -39,6 +39,8 @@ class ExpertTrainer:
         total_steps: optimizer steps for the decay schedule (None = constant)
         lr_decay: "none" | "linear" | "cosine" after warmup
         weight_decay: AdamW weight decay (0 keeps frozen-row semantics exact)
+        abort_on_nonfinite: raise FloatingPointError on a non-finite loss
+            (default) instead of silently training on NaN; False skips the step
     """
 
     def __init__(
@@ -56,6 +58,7 @@ class ExpertTrainer:
         total_steps=None,
         lr_decay="none",
         weight_decay=0.0,
+        abort_on_nonfinite=True,
     ):
         self.backend = get_backend(backend) if isinstance(backend, str) else backend
         self.model = model
@@ -66,6 +69,8 @@ class ExpertTrainer:
         )
         self.kl_weight = kl_weight
         self.train_full_router = train_full_router
+        self.abort_on_nonfinite = abort_on_nonfinite
+        self.nonfinite_steps = 0
 
         # Step 1: Snapshot pretrained router for KL reference (before any freezing)
         self._ref_router_params = self._snapshot_routers()
@@ -176,15 +181,22 @@ class ExpertTrainer:
             handle = layer.router.register_forward_hook(hook_fn)
             self._hooks.append(handle)
 
-    def _compute_kl_loss(self):
+    def _compute_kl_loss(self, token_mask=None):
         """
         Compute KL divergence between current and pretrained router distributions.
 
         Uses captured router inputs (from forward hooks) and frozen parameter
         snapshot to compute reference logits, then KL(current || ref).
+
+        Args:
+            token_mask: optional bool tensor [B*S]; only True positions count.
+                Pad positions must be excluded — with an attention mask their
+                hidden states can be non-finite and would poison the loss.
         """
         device = next(self.model.parameters()).device
         total_kl = torch.tensor(0.0, device=device)
+        if token_mask is not None:
+            token_mask = token_mask.reshape(-1).to(device)
 
         router_idx = 0
         moe_layers = [layer for _, layer in iter_moe_layers(self.model)]
@@ -196,6 +208,11 @@ class ExpertTrainer:
 
             # Get the actual input the router received during this forward pass
             hs_flat = self._router_inputs[router_idx]
+            if token_mask is not None and token_mask.numel() == hs_flat.shape[0]:
+                hs_flat = hs_flat[token_mask]
+                if hs_flat.shape[0] == 0:
+                    router_idx += 1
+                    continue
 
             router = layer.router
 
@@ -242,7 +259,9 @@ class ExpertTrainer:
             **kwargs,
         )
         task_loss = outputs.loss
-        kl_loss = self._compute_kl_loss()
+        attention_mask = kwargs.get("attention_mask")
+        token_mask = attention_mask.bool() if attention_mask is not None else None
+        kl_loss = self._compute_kl_loss(token_mask)
 
         return task_loss, kl_loss
 
@@ -273,6 +292,19 @@ class ExpertTrainer:
 
         task_loss, kl_loss = self.compute_loss(input_ids, labels, **kwargs)
         total_loss = task_loss + self.kl_weight * kl_loss
+        if not torch.isfinite(total_loss):
+            self.nonfinite_steps += 1
+            self.optimizer.zero_grad(set_to_none=True)
+            self._micro_step = 0
+            msg = (f"non-finite loss (task={task_loss.item()}, kl={kl_loss.item()}) "
+                   f"at micro-step {self.optimizer_steps * self.grad_accum_steps}")
+            if self.abort_on_nonfinite:
+                raise FloatingPointError(msg)
+            import warnings
+            warnings.warn(msg + "; skipping step", stacklevel=2)
+            return {"task_loss": task_loss.item(), "kl_loss": kl_loss.item(),
+                    "total_loss": total_loss.item(), "lr": self.current_lr,
+                    "grad_norm": None, "stepped": False, "skipped": True}
         self.backend.backward(total_loss / self.grad_accum_steps)
         self._micro_step += 1
 
@@ -295,4 +327,5 @@ class ExpertTrainer:
             "lr": self.current_lr,
             "grad_norm": grad_norm,
             "stepped": stepped,
+            "skipped": False,
         }
