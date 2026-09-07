@@ -35,12 +35,18 @@ def get_backend(name="torch"):
 class TorchBackend:
     """Reference backend: plain PyTorch Adam + eager forward/backward."""
 
-    def create_optimizer(self, param_groups):
-        return torch.optim.Adam(param_groups)
+    def create_optimizer(self, param_groups, weight_decay=0.0):
+        return torch.optim.AdamW(param_groups, weight_decay=weight_decay)
+
+    def backward(self, loss):
+        loss.backward()
+
+    def step(self, optimizer):
+        optimizer.step()
 
     def backward_and_step(self, loss, optimizer):
-        loss.backward()
-        optimizer.step()
+        self.backward(loss)
+        self.step(optimizer)
 
 
 class _LazyImportBackend:

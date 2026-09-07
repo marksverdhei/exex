@@ -8,10 +8,8 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from exex.arch import MoEArch
+from exex.loading import load_model
 from exex.pruner import collect_router_stats
 
 
@@ -28,15 +26,13 @@ def main():
                         help="MoE experts implementation; eager avoids fused "
                              "grouped-GEMM kernels that assert on unaligned "
                              "per-expert token counts under no_grad")
+    parser.add_argument("--cartridge", action="append", default=[],
+                        help="Install before eval: path[:expert[:target_index|new]]; repeatable")
     parser.add_argument("--output", default=None, help="Write JSON result here")
     args = parser.parse_args()
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="auto",
-        experts_implementation=args.experts_impl,
-    )
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    model, tokenizer = load_model(args.model_path, dtype=args.dtype,
+                                  experts_impl=args.experts_impl, cartridges=args.cartridge)
 
     from datasets import load_dataset
     if os.path.isfile(args.dataset):
@@ -56,6 +52,7 @@ def main():
     gate = stats.gate_mass / max(stats.tokens, 1)
     result = {
         "model": args.model_path,
+        "cartridges": args.cartridge,
         "dataset": args.dataset,
         "tokens": stats.tokens,
         "num_experts": arch.num_experts,
