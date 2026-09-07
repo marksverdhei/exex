@@ -73,7 +73,8 @@ class TestCloneRouterNoise:
     def test_noise_is_deterministic(self, tiny_gemma4_moe):
         import copy
         from exex.manager import ExpertManager
-        a = copy.deepcopy(tiny_gemma4_moe); b = copy.deepcopy(tiny_gemma4_moe)
+        a = copy.deepcopy(tiny_gemma4_moe)
+        b = copy.deepcopy(tiny_gemma4_moe)
         ExpertManager.from_model(a).clone_expert(1, router_noise=0.02, seed=7)
         ExpertManager.from_model(b).clone_expert(1, router_noise=0.02, seed=7)
         for la, lb in zip(a.model.layers, b.model.layers, strict=True):
