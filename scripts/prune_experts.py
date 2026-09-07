@@ -11,6 +11,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from exex.pruner import (
+    STRATEGIES,
     collect_router_stats,
     score_experts,
     select_prune_candidates,
@@ -35,9 +36,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model_path", required=True)
     parser.add_argument("--strategy", default="reap",
-                        choices=["utilisation", "magnitude", "reap"])
+                        choices=list(STRATEGIES),
+                        help="reap: router-weighted expert activation norm "
+                             "(arXiv:2510.13999); gate_weight_norm: gate mass "
+                             "x weight norm proxy; utilisation: routing "
+                             "frequency; magnitude: weight norm")
     parser.add_argument("--calibration_dataset",
-                        help="HF dataset (needed for utilisation/reap)")
+                        help="HF dataset or local JSON file (needed for "
+                             "utilisation/reap/gate_weight_norm)")
     parser.add_argument("--text_column", default="text")
     parser.add_argument("--max_samples", type=int, default=128)
     parser.add_argument("--max_length", type=int, default=512)
@@ -59,7 +65,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
     stats = None
-    if args.strategy in ("utilisation", "reap"):
+    if args.strategy in ("utilisation", "reap", "gate_weight_norm"):
         if not args.calibration_dataset:
             parser.error(f"--strategy {args.strategy} requires --calibration_dataset")
         print("Collecting router statistics...")
@@ -69,6 +75,7 @@ def main():
                 args.calibration_dataset, tokenizer,
                 args.text_column, args.max_samples, args.max_length,
             ),
+            activation_norms=args.strategy == "reap",
         )
 
     scores = score_experts(model, args.strategy, stats=stats)
