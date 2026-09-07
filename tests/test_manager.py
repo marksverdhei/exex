@@ -48,3 +48,33 @@ class TestExpertManagerGemma4:
         for layer in model.model.layers:
             if hasattr(layer, "experts"):
                 assert layer.experts.gate_up_proj.shape[0] == original_num_experts - 1
+
+
+class TestCloneRouterNoise:
+    def test_verbatim_clone_ties_with_source(self, tiny_gemma4_moe):
+        from exex.manager import ExpertManager
+        m = ExpertManager.from_model(tiny_gemma4_moe)
+        new = m.clone_expert(1)
+        for layer in tiny_gemma4_moe.model.layers:
+            w = layer.router.proj.weight.data
+            assert torch.equal(w[new], w[1])
+
+    def test_noise_breaks_tie_but_keeps_expert_weights(self, tiny_gemma4_moe):
+        from exex.manager import ExpertManager
+        m = ExpertManager.from_model(tiny_gemma4_moe)
+        new = m.clone_expert(1, router_noise=0.02, seed=3)
+        for layer in tiny_gemma4_moe.model.layers:
+            w = layer.router.proj.weight.data
+            rel = (w[new] - w[1]).norm() / w[1].norm()
+            assert 0.005 < rel.item() < 0.05
+            assert torch.equal(layer.experts.gate_up_proj.data[new], layer.experts.gate_up_proj.data[1])
+            assert torch.equal(layer.experts.down_proj.data[new], layer.experts.down_proj.data[1])
+
+    def test_noise_is_deterministic(self, tiny_gemma4_moe):
+        import copy
+        from exex.manager import ExpertManager
+        a = copy.deepcopy(tiny_gemma4_moe); b = copy.deepcopy(tiny_gemma4_moe)
+        ExpertManager.from_model(a).clone_expert(1, router_noise=0.02, seed=7)
+        ExpertManager.from_model(b).clone_expert(1, router_noise=0.02, seed=7)
+        for la, lb in zip(a.model.layers, b.model.layers, strict=True):
+            assert torch.equal(la.router.proj.weight.data, lb.router.proj.weight.data)

@@ -38,6 +38,9 @@ def parse_args():
     target.add_argument("--clone_from", type=int, default=None,
                         help="Grow a new slot cloned from this expert and train "
                              "that instead (expert extension)")
+    p.add_argument("--clone_router_noise", type=float, default=0.0,
+                   help="With --clone_from: relative Gaussian noise on the new slot's "
+                        "router row so it does not tie with its source (0 = verbatim copy)")
     p.add_argument("--label", default=None,
                    help="Label recorded in the cartridge manifest / config")
     # optimisation
@@ -97,7 +100,8 @@ def main():
 
     manager = ExpertManager.from_model(model)
     if args.clone_from is not None:
-        new_idx = manager.clone_expert(source_idx=args.clone_from, label=args.label)
+        new_idx = manager.clone_expert(source_idx=args.clone_from, label=args.label,
+                                       router_noise=args.clone_router_noise, seed=args.seed)
         expert_indices = [new_idx]
         print(f"Cloned expert {args.clone_from} -> new slot {new_idx} "
               f"(num_experts now {manager.arch.num_experts})", flush=True)

@@ -32,8 +32,19 @@ class ExpertManager:
     def get_labels(self):
         return getattr(self.config, "expert_labels", {})
 
-    def clone_expert(self, source_idx, label=None):
-        """Clone an existing expert to a new slot at the end."""
+    def clone_expert(self, source_idx, label=None, router_noise=0.0, seed=0):
+        """Clone an existing expert to a new slot at the end.
+
+        Args:
+            router_noise: relative std of Gaussian noise added to the new
+                slot's router row (fraction of the row norm / sqrt(hidden)).
+                0 copies the row verbatim, which ties the clone with its
+                source and merely splits traffic (26B clone arm, 2026-09-07);
+                ~0.01-0.05 breaks the tie so the router can specialize the
+                new slot while the expert weights stay identical to the source.
+            seed: RNG seed for the perturbation (deterministic).
+        """
+        gen = torch.Generator().manual_seed(seed)
         if not 0 <= source_idx < self.arch.num_experts:
             raise IndexError(
                 f"source_idx {source_idx} out of range (num_experts={self.arch.num_experts})"
@@ -59,6 +70,11 @@ class ExpertManager:
             experts.num_experts += 1
 
             new_weight = grown(router.proj.weight)
+            if router_noise > 0:
+                row = new_weight.data[-1]
+                scale = router_noise * row.float().norm() / (row.numel() ** 0.5)
+                noise = torch.randn(row.shape, generator=gen, dtype=torch.float32)
+                row.add_((noise * scale).to(device=row.device, dtype=row.dtype))
             router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False,
                                     device="meta")
             router.proj.weight = new_weight
