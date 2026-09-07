@@ -25,6 +25,10 @@ def main():
                         help="1.0 = replace, 0.5 = average with incumbent")
     parser.add_argument("--merge_config", help="JSON file with a list of installs")
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument("--dtype", default="bfloat16",
+                        choices=["bfloat16", "float16", "float32"],
+                        help="Load dtype; bf16 default matches native Gemma 4 "
+                             "checkpoints (fp16 casts lose precision / overflow)")
     args = parser.parse_args()
 
     if bool(args.merge_config) == bool(args.cartridge):
@@ -32,7 +36,7 @@ def main():
 
     print(f"Loading model from {args.model_path}...")
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.float16, device_map="cpu"
+        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="cpu"
     )
 
     if args.merge_config:
