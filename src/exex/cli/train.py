@@ -37,6 +37,9 @@ def build_parser():
     p.add_argument("--clone_router_noise", type=float, default=0.0,
                    help="With --clone_from: relative Gaussian noise on the new slot's "
                         "router row so it does not tie with its source (0 = verbatim copy)")
+    p.add_argument("--top_k", type=int, default=None,
+                   help="Train (and periodically eval) with this many active experts per "
+                        "token instead of the checkpoint default; recorded in run.json")
     p.add_argument("--label", default=None,
                    help="Label recorded in the cartridge manifest / config")
     # optimisation
@@ -107,6 +110,10 @@ def main(argv=None):
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
     manager = ExpertManager.from_model(model)
+    if args.top_k is not None:
+        from exex.loading import set_top_k
+        prev = set_top_k(model, args.top_k)
+        print(f"Router top-k for training: {prev} -> {args.top_k}", flush=True)
     if args.clone_from is not None:
         new_idx = manager.clone_expert(source_idx=args.clone_from, label=args.label,
                                        router_noise=args.clone_router_noise, seed=args.seed)
@@ -226,7 +233,8 @@ def main(argv=None):
         model.config.save_pretrained(args.output_dir)
 
     run = {"args": vars(args), "expert_indices": expert_indices,
-           "num_experts": manager.arch.num_experts, "trainable_params": n_trainable,
+           "num_experts": manager.arch.num_experts, "top_k": args.top_k,
+           "trainable_params": n_trainable,
            "optimizer_steps": step, "tokens_seen": tokens_seen,
            "nonfinite_steps": trainer.nonfinite_steps,
            "elapsed_s": round(time.time() - t0, 1), "eval_ppl_history": eval_history,
