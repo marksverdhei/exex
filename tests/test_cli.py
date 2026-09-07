@@ -390,3 +390,24 @@ def test_train_with_top_k_override(ws, tiny_model_dir, jsonl_path):
     assert run["top_k"] == 3
     assert _read_json(os.path.join(out, "config.json"))["top_k_experts"] == 3
     _rm(out)
+
+
+def test_train_forces_right_padding(ws, tiny_model_dir, jsonl_path, monkeypatch, capsys):
+    """A left-padding tokenizer must be flipped to right padding for training."""
+    from transformers import AutoTokenizer
+
+    orig = AutoTokenizer.from_pretrained
+
+    def left_padding(*a, **k):
+        tok = orig(*a, **k)
+        tok.padding_side = "left"
+        return tok
+
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", staticmethod(left_padding))
+    out = ws / "run_rightpad"
+    train.main([
+        "--model_path", tiny_model_dir, "--dataset", jsonl_path,
+        "--expert_indices", "1", "--output_dir", str(out), *TRAIN_ARGS,
+    ])
+    assert "-> 'right'" in capsys.readouterr().out
+    _rm(out)
