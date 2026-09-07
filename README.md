@@ -105,7 +105,7 @@ python scripts/prune_experts.py \
   --output_dir ./checkpoints/pruned
 ```
 
-Strategies: `utilisation` (routing frequency), `magnitude` (weight norm), `reap` (router gate mass × weight norm, after [arXiv:2510.13999](https://arxiv.org/abs/2510.13999)). `--mode zero` zeroes weights in place for sparse runtimes instead of shrinking the model.
+Strategies: `utilisation` (routing frequency), `magnitude` (weight norm), `reap` (Router-weighted Expert Activation Pruning, [arXiv:2510.13999](https://arxiv.org/abs/2510.13999): mean over routed calibration tokens of router weight × L2 norm of the expert's output), `gate_weight_norm` (the cheaper router gate mass × weight norm proxy that was previously labelled `reap`). `--mode zero` zeroes weights in place for sparse runtimes instead of shrinking the model.
 
 ### Analyze routing (currently broken on transformers 5 — see #27)
 
