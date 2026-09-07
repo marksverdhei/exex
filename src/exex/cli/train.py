@@ -108,6 +108,13 @@ def main(argv=None):
     print(f"Loading model from {args.model_path}...", flush=True)
     model = AutoModelForCausalLM.from_pretrained(args.model_path, **load_kwargs)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    # Right-pad for training: with a causal mask, real tokens then never see a
+    # pad token even when no attention mask is passed. Gemma 4 tokenizers
+    # default to LEFT padding (generation-friendly), which silently let real
+    # tokens attend to pads in every batch>1 run before 2026-09-07.
+    if tokenizer.padding_side != "right":
+        print(f"tokenizer.padding_side {tokenizer.padding_side!r} -> 'right' for training", flush=True)
+        tokenizer.padding_side = "right"
 
     manager = ExpertManager.from_model(model)
     if args.top_k is not None:
