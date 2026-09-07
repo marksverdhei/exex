@@ -27,11 +27,11 @@ def main():
     parser.add_argument("--model_path", type=str, required=True, help="Path to the MoE model (local or HF hub)")
     parser.add_argument("--dataset_path", type=str, default=None, help="Path to HF dataset. Uses dummy data if not provided.")
     parser.add_argument("--max_samples", type=int, default=50, help="Max samples per domain to analyze")
-    
+
     args = parser.parse_args()
-    
+
     analyzer = RoutingAnalyzer(args.model_path)
-    
+
     if args.dataset_path:
         from datasets import load_dataset
         dataset = load_dataset(args.dataset_path, split="train")
@@ -39,14 +39,14 @@ def main():
     else:
         print("No dataset provided, using internal multi-domain dummy dataset...")
         dataset = create_dummy_dataset()
-        
+
     results = analyzer.analyze_dataset(
-        dataset, 
-        text_col="text", 
-        domain_col="domain", 
+        dataset,
+        text_col="text",
+        domain_col="domain",
         max_samples_per_domain=args.max_samples
     )
-    
+
     analyzer.print_associations(results)
     analyzer.find_correlations(results, threshold_ratio=0.75)
 

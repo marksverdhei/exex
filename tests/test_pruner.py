@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-from exex.arch import MoEArch
 from exex.pruner import (
     collect_router_stats,
     score_experts,
