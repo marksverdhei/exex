@@ -3,41 +3,13 @@
 
 import argparse
 import json
-import math
 import os
 import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-
-@torch.no_grad()
-def perplexity(model, tokenizer, texts, max_length=512):
-    """Mean per-token NLL over texts -> (ppl, total_tokens)."""
-    total_nll, total_tokens = 0.0, 0
-    for text in texts:
-        enc = tokenizer(text, return_tensors="pt", truncation=True,
-                        max_length=max_length).to(model.device)
-        if enc.input_ids.shape[1] < 2:
-            continue
-        out = model(input_ids=enc.input_ids, labels=enc.input_ids)
-        n_tokens = enc.input_ids.shape[1] - 1
-        total_nll += out.loss.float().item() * n_tokens
-        total_tokens += n_tokens
-    return math.exp(total_nll / max(total_tokens, 1)), total_tokens
-
-
-def load_texts(dataset, text_column, max_samples):
-    from datasets import load_dataset
-    if os.path.isfile(dataset):
-        ds = load_dataset("json", data_files=dataset, split="train")
-    else:
-        name, _, split = dataset.partition("@")
-        ds = load_dataset(name, split=split or "test")
-    n = min(max_samples, len(ds))
-    return [ds[i][text_column] for i in range(n)]
+from exex.evaluate import load_texts, perplexity
+from exex.loading import load_model
 
 
 def main():
@@ -54,21 +26,20 @@ def main():
                         help="MoE experts implementation; eager avoids fused "
                              "grouped-GEMM kernels that assert on unaligned "
                              "per-expert token counts under no_grad")
+    parser.add_argument("--cartridge", action="append", default=[],
+                        help="Install before eval: path[:expert[:target_index|new]]; repeatable")
     parser.add_argument("--output", default=None, help="Write JSON result here")
     args = parser.parse_args()
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=getattr(torch, args.dtype), device_map="auto",
-        experts_implementation=args.experts_impl,
-    )
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    model, tokenizer = load_model(args.model_path, dtype=args.dtype,
+                                  experts_impl=args.experts_impl, cartridges=args.cartridge)
 
     texts = load_texts(args.dataset, args.text_column, args.max_samples)
     ppl, n_tokens = perplexity(model, tokenizer, texts, max_length=args.max_length)
 
     result = {
         "model": args.model_path,
+        "cartridges": args.cartridge,
         "dataset": args.dataset,
         "num_texts": len(texts),
         "num_tokens": n_tokens,
