@@ -23,10 +23,12 @@ def main():
     parser.add_argument("--dataset", type=str, required=True,
                         help="HF dataset name or local path")
     parser.add_argument("--text_column", type=str, default="text")
-    parser.add_argument("--expert_indices", type=int, nargs="+", required=True,
-                        help="Expert indices to train")
-    parser.add_argument("--clone_from", type=int, default=None,
-                        help="Clone this expert to a new slot before training")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--expert_indices", type=int, nargs="+",
+                        help="Existing expert slots to train in place")
+    target.add_argument("--clone_from", type=int, default=None,
+                        help="Grow a new slot cloned from this expert and train "
+                             "that instead (expert extension)")
     parser.add_argument("--kl_weight", type=float, default=0.1)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--router_lr_scale", type=float, default=0.1)
@@ -57,12 +59,14 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
     # Optionally clone expert to new slot
-    expert_indices = list(args.expert_indices)
     if args.clone_from is not None:
         manager = ExpertManager.from_model(model)
         new_idx = manager.clone_expert(source_idx=args.clone_from)
         expert_indices = [new_idx]
-        print(f"Cloned expert {args.clone_from} -> new slot {new_idx}")
+        print(f"Cloned expert {args.clone_from} -> new slot {new_idx} "
+              f"(num_experts now {manager.arch.num_experts})")
+    else:
+        expert_indices = list(args.expert_indices)
 
     # Create trainer
     trainer = ExpertTrainer(
