@@ -146,7 +146,11 @@ Only the trained expert views and router carry gradients and optimizer state; ev
 
 **Validated end-to-end on Gemma 4 26B A4B** (single GH200, bf16): the toolkit trains one expert in place, saves it as a 341 MB cartridge that reproduces the checkpoint bit-exactly, merges it into a fresh base, grows a 129th slot, and evaluates — all in one GPU-hour. Peak training VRAM ~58 GB at batch size 1, seq 512, full bf16 (no quantization). Details in [#10](https://github.com/marksverdhei/exex/issues/10).
 
-**What the first experiment did *not* show.** Training expert 42 for 500 steps on templated PubMedQA cut held-out perplexity on the *same template* by 11 % — but controls run afterwards showed the same model gains 7 % on non-medical SQuAD in that template and **0 %** on raw PubMed abstracts. The gain was format learning, not medical knowledge. Any domain claim for this method needs raw-text held-out evals; those runs are in progress. Numbers from before 2026-09-07 also predate the pad-token loss fix (#25) and router-row freeze (#26).
+**What single-expert training actually learns** (batch-2 readout, 2026-09-08, clean training stack — pad-loss #25, NaN/KL #52, right-padding #54):
+
+- *Templated data → format learning.* The original −11 % on templated PubMedQA **replicates** on the fixed stack (5.300 → 4.703), but the same model gains 6.4 % on non-medical SQuAD in the same template and is **flat (+0.1 %) on raw PubMed abstracts**. The template wrapper, not medical knowledge, carries most of the gain; the medical-specific residual within-template is ≈ 2 pp.
+- *Raw-text training → real but modest domain learning.* Training on raw PubMed abstracts improves held-out raw medical text by **−1.4 %** PPL; the control trained on raw SQuAD contexts improves its own domain by **−4.6 %** while leaving medical text flat (+0.1 %) — so gains are domain-specific, not generic. Costs exist: the medical arm regressed wikitext-2 by +2.4 %. One expert at a 0.5 M-token budget buys percent-level domain gains, not the headline number.
+- *Routing barely moves on raw text* (trained-expert frequency 0.0491 → 0.0489): the gain lives in the expert's weights, not in routing shifts. Training with router top-k 12 instead of 8 adds nothing (−0.1 % in-domain, worse general).
 
 A candid state-of-the-repo audit lives in [`docs/AUDIT-2026-09-07.md`](docs/AUDIT-2026-09-07.md).
 
