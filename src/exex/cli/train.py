@@ -72,6 +72,22 @@ def build_parser():
     p.add_argument("--no_shuffle", action="store_true",
                    help="Iterate the dataset in file order instead of a seeded shuffle")
     # periodic eval
+    # routing separation (batch-4 arm: centroid init + contrastive push-down)
+    p.add_argument("--row_init", default="clone", choices=["clone", "centroid"],
+                   help="With --clone_from: 'centroid' re-inits the new slot's "
+                        "router row from the domain-token centroid instead of "
+                        "keeping the (noised) copy of the source row")
+    p.add_argument("--row_init_samples", type=int, default=64,
+                   help="Domain texts used for the centroid estimate")
+    p.add_argument("--row_warmup_steps", type=int, default=0,
+                   help="Optimizer steps training only router rows before "
+                        "expert weights unfreeze")
+    p.add_argument("--neg_dataset", default=None,
+                   help="Out-of-domain json(l); enables the contrastive "
+                        "push-down of the trained slot's routing probability")
+    p.add_argument("--neg_weight", type=float, default=1.0)
+    p.add_argument("--neg_samples", type=int, default=2000,
+                   help="Negative texts cycled during training")
     p.add_argument("--eval_dataset", default=None, help="Held-out json(l) for PPL")
     p.add_argument("--eval_every", type=int, default=0, help="Optimizer steps between evals")
     p.add_argument("--eval_samples", type=int, default=100)
@@ -152,8 +168,31 @@ def main(argv=None):
         lr_decay=args.lr_decay,
         weight_decay=args.weight_decay,
         abort_on_nonfinite=not args.allow_nonfinite,
+        row_warmup_steps=args.row_warmup_steps,
+        contrastive_slot=expert_indices[0] if args.neg_dataset else None,
+        contrastive_weight=args.neg_weight,
     )
     n_trainable = sum(p.numel() for p in trainer.trainable_parameters)
+
+    if args.row_init == "centroid":
+        if args.clone_from is None:
+            raise SystemExit("--row_init centroid requires --clone_from")
+        from exex.separation import centroid_router_init
+        cen_texts = load_texts(args.dataset, args.text_column, args.row_init_samples)
+        def _cen_batches():
+            for t in cen_texts:
+                yield tokenizer(t, return_tensors="pt", truncation=True,
+                                max_length=args.max_length)
+        cosines = centroid_router_init(model, expert_indices[0], _cen_batches())
+        print(f"[row_init] centroid over {len(cen_texts)} texts; cosine(new,old) "
+              f"per layer min/mean/max = {min(cosines):.3f}/"
+              f"{sum(cosines)/len(cosines):.3f}/{max(cosines):.3f}", flush=True)
+
+    neg_texts = None
+    if args.neg_dataset:
+        neg_texts = load_texts(args.neg_dataset, args.text_column, args.neg_samples)
+        print(f"[contrastive] {len(neg_texts)} negative texts, "
+              f"weight {args.neg_weight}, slot {expert_indices[0]}", flush=True)
 
     print(f"Loading dataset {args.dataset}...", flush=True)
     if os.path.isfile(args.dataset):
@@ -219,6 +258,14 @@ def main(argv=None):
             step_kwargs = {"input_ids": enc.input_ids, "labels": labels}
             if args.attention_mask == "on":
                 step_kwargs["attention_mask"] = enc.attention_mask
+            if neg_texts:
+                lo = (step * args.batch_size) % len(neg_texts)
+                neg = neg_texts[lo:lo + args.batch_size] or neg_texts[:args.batch_size]
+                neg_enc = tokenizer(neg, return_tensors="pt", truncation=True,
+                                    max_length=args.max_length,
+                                    padding=True).to(model.device)
+                step_kwargs["neg_input_ids"] = neg_enc.input_ids
+                step_kwargs["neg_attention_mask"] = neg_enc.attention_mask
             m = trainer.train_step(**step_kwargs)
             tokens_seen += int(enc.attention_mask.sum())
             if not m["stepped"]:
@@ -227,7 +274,8 @@ def main(argv=None):
             if step % args.log_every == 0 or step == args.max_steps:
                 row = {"step": step, "epoch": epoch, "tokens_seen": tokens_seen,
                        "elapsed_s": round(time.time() - t0, 1),
-                       **{k: m[k] for k in ("task_loss", "kl_loss", "total_loss", "lr", "grad_norm")}}
+                       **{k: m[k] for k in ("task_loss", "kl_loss", "total_loss",
+                                            "contrastive_loss", "lr", "grad_norm")}}
                 log(row)
                 print(f"Step {step}/{args.max_steps} | task_loss={m['task_loss']:.4f} | "
                       f"kl_loss={m['kl_loss']:.6f} | lr={m['lr']:.2e}"
