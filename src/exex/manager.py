@@ -73,8 +73,10 @@ class ExpertManager:
             if router_noise > 0:
                 row = new_weight.data[-1]
                 scale = router_noise * row.float().norm() / (row.numel() ** 0.5)
+                # generator lives on CPU; move the noise to the row's device
+                # before mixing with the (possibly CUDA) scale tensor
                 noise = torch.randn(row.shape, generator=gen, dtype=torch.float32)
-                row.add_((noise * scale).to(device=row.device, dtype=row.dtype))
+                row.add_((noise.to(row.device) * scale).to(dtype=row.dtype))
             router.proj = nn.Linear(new_weight.shape[1], new_weight.shape[0], bias=False,
                                     device="meta")
             router.proj.weight = new_weight
