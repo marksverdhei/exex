@@ -145,6 +145,25 @@ def test_train_in_place_writes_cartridge_not_model(trained_run):
     assert rows and rows[-1]["step"] == 2
 
 
+def test_train_snapshot_every(ws, tiny_model_dir, jsonl_path):
+    out = ws / "run_snapshots"
+    train.main([
+        "--model_path", tiny_model_dir, "--dataset", jsonl_path,
+        "--expert_indices", "1", "--output_dir", str(out),
+        "--snapshot_every", "1", *TRAIN_ARGS,
+    ])
+    try:
+        run = _read_json(out / "run.json")
+        # max_steps=2, snapshots strictly before the end -> exactly step 1
+        assert [s["step"] for s in run["snapshots"]] == [1]
+        snap = out / "snapshots" / "cartridge_step1.safetensors"
+        assert snap.exists()
+        from exex.cartridge import load_cartridge
+        assert load_cartridge(str(snap)).expert_names == ["expert_1"]
+    finally:
+        _rm(out)
+
+
 def test_train_save_full_model(ws, tiny_model_dir, jsonl_path):
     out = ws / "run_full"
     train.main([

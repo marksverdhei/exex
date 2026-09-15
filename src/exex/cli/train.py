@@ -75,6 +75,11 @@ def build_parser():
     p.add_argument("--eval_dataset", default=None, help="Held-out json(l) for PPL")
     p.add_argument("--eval_every", type=int, default=0, help="Optimizer steps between evals")
     p.add_argument("--eval_samples", type=int, default=100)
+    p.add_argument("--snapshot_every", type=int, default=0,
+                   help="Optimizer steps between mid-training cartridge "
+                        "snapshots under <output_dir>/snapshots/ (0=off); "
+                        "lets multi-set PPL curves be evaluated post-hoc "
+                        "without full-model saves")
     # output
     p.add_argument("--output_dir", required=True)
     p.add_argument("--save_full_model", action="store_true",
@@ -173,6 +178,22 @@ def main(argv=None):
         log({"step": step, "eval_ppl": ppl, "eval_tokens": n_tok})
         return ppl
 
+    cart_names = {(args.label or f"expert_{idx}") if len(expert_indices) == 1
+                  else f"{args.label or 'expert'}_{idx}": idx for idx in expert_indices}
+    cart_labels = {n: [args.label] for n in cart_names} if args.label else None
+    snapshots = []
+
+    def save_snapshot(step):
+        # Views alias the fused tensors, so mid-training extraction sees the
+        # current weights without finalizing.
+        snap_dir = os.path.join(args.output_dir, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        path = os.path.join(snap_dir, f"cartridge_step{step}.safetensors")
+        save_cartridge(model, cart_names, path,
+                       source_model=args.model_path, labels=cart_labels)
+        snapshots.append({"step": step, "path": path})
+        print(f"[snapshot] step {step} -> {path}", flush=True)
+
     print(f"Training experts {expert_indices} ({n_trainable:,} trainable params) "
           f"for {args.max_steps} optimizer steps x {args.grad_accum} micro-batches "
           f"of {args.batch_size}...", flush=True)
@@ -214,6 +235,9 @@ def main(argv=None):
                       flush=True)
             if eval_texts and step % args.eval_every == 0 and step < args.max_steps:
                 eval_history.append(run_eval(step))
+            if args.snapshot_every and step % args.snapshot_every == 0 \
+                    and step < args.max_steps:
+                save_snapshot(step)
         epoch += 1
     if eval_texts:
         eval_history.append(run_eval(step))
@@ -223,13 +247,11 @@ def main(argv=None):
     artefacts = {}
     if not args.no_cartridge:
         cart_path = os.path.join(args.output_dir, "cartridge.safetensors")
-        names = {(args.label or f"expert_{idx}") if len(expert_indices) == 1
-                 else f"{args.label or 'expert'}_{idx}": idx for idx in expert_indices}
-        labels = {n: [args.label] for n in names} if args.label else None
-        save_cartridge(model, names, cart_path, source_model=args.model_path, labels=labels)
+        save_cartridge(model, cart_names, cart_path,
+                       source_model=args.model_path, labels=cart_labels)
         artefacts["cartridge"] = cart_path
         print(f"Wrote cartridge {cart_path} ({os.path.getsize(cart_path) / 1e6:.0f} MB): "
-              f"{list(names)}", flush=True)
+              f"{list(cart_names)}", flush=True)
     if args.save_full_model:
         print(f"Saving full model to {args.output_dir}...", flush=True)
         model.save_pretrained(args.output_dir)
@@ -245,7 +267,7 @@ def main(argv=None):
            "optimizer_steps": step, "tokens_seen": tokens_seen,
            "nonfinite_steps": trainer.nonfinite_steps,
            "elapsed_s": round(time.time() - t0, 1), "eval_ppl_history": eval_history,
-           "artefacts": artefacts}
+           "snapshots": snapshots, "artefacts": artefacts}
     with open(os.path.join(args.output_dir, "run.json"), "w") as f:
         json.dump(run, f, indent=2)
     print("Done.", flush=True)
