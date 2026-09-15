@@ -59,6 +59,9 @@ class ExpertTrainer:
         lr_decay="none",
         weight_decay=0.0,
         abort_on_nonfinite=True,
+        row_warmup_steps=0,
+        contrastive_slot=None,
+        contrastive_weight=1.0,
     ):
         self.backend = get_backend(backend) if isinstance(backend, str) else backend
         self.model = model
@@ -71,6 +74,9 @@ class ExpertTrainer:
         self.train_full_router = train_full_router
         self.abort_on_nonfinite = abort_on_nonfinite
         self.nonfinite_steps = 0
+        self.row_warmup_steps = int(row_warmup_steps)
+        self.contrastive_slot = contrastive_slot
+        self.contrastive_weight = contrastive_weight
 
         # Step 1: Snapshot pretrained router for KL reference (before any freezing)
         self._ref_router_params = self._snapshot_routers()
@@ -240,6 +246,47 @@ class ExpertTrainer:
 
         return total_kl / max(len(self._ref_router_params), 1)
 
+    def _set_expert_views_trainable(self, flag):
+        for name, param in self.model.named_parameters():
+            if "_train_" in name and "router" not in name:
+                param.requires_grad_(flag)
+
+    def compute_contrastive_loss(self, neg_input_ids, neg_attention_mask=None):
+        """Mean routing probability of ``contrastive_slot`` on a negative
+        (out-of-domain) batch — a push-down objective.
+
+        The negative forward runs under ``no_grad``; router inputs are
+        captured detached by the hooks, so gradients reach only the
+        trainable router rows, never the expert weights.
+        """
+        from exex.surgery import composed_router_params as _crp
+
+        self._router_inputs = {}
+        with torch.no_grad():
+            self.model(input_ids=neg_input_ids)
+        device = next(self.model.parameters()).device
+        total = torch.tensor(0.0, device=device)
+        n_layers = 0
+        mask = None
+        if neg_attention_mask is not None:
+            mask = neg_attention_mask.reshape(-1).bool().to(device)
+        for idx, (_, layer) in enumerate(iter_moe_layers(self.model)):
+            if idx not in self._router_inputs:
+                continue
+            hs = self._router_inputs[idx]
+            if mask is not None and mask.numel() == hs.shape[0]:
+                hs = hs[mask]
+                if hs.shape[0] == 0:
+                    continue
+            router = layer.router
+            weight, _ = _crp(router)
+            z = router.norm(hs) * router.scale * router.scalar_root_size
+            probs = F.softmax(F.linear(z, weight).float(), dim=-1)
+            total = total + probs[:, self.contrastive_slot].mean()
+            n_layers += 1
+        self._router_inputs = {}
+        return total / max(n_layers, 1)
+
     def compute_loss(self, input_ids, labels, **kwargs):
         """
         Compute task loss and KL regularization loss.
@@ -278,7 +325,8 @@ class ExpertTrainer:
         self._router_inputs = {}
         finalize_expert_training(self.model)
 
-    def train_step(self, input_ids, labels, **kwargs):
+    def train_step(self, input_ids, labels, neg_input_ids=None,
+                   neg_attention_mask=None, **kwargs):
         """
         One micro-step: forward + backward; optimizer step every
         ``grad_accum_steps`` micro-steps (with clipping and LR schedule).
@@ -287,11 +335,23 @@ class ExpertTrainer:
             dict with task_loss, kl_loss, total_loss, lr, stepped
         """
         self.model.train()
+        if self.row_warmup_steps:
+            self._set_expert_views_trainable(
+                self.optimizer_steps >= self.row_warmup_steps
+            )
         if self._micro_step % self.grad_accum_steps == 0:
             self.optimizer.zero_grad(set_to_none=True)
 
+        contrastive_loss = None
+        if self.contrastive_slot is not None and neg_input_ids is not None:
+            contrastive_loss = self.compute_contrastive_loss(
+                neg_input_ids, neg_attention_mask
+            )
+
         task_loss, kl_loss = self.compute_loss(input_ids, labels, **kwargs)
         total_loss = task_loss + self.kl_weight * kl_loss
+        if contrastive_loss is not None:
+            total_loss = total_loss + self.contrastive_weight * contrastive_loss
         if not torch.isfinite(total_loss):
             self.nonfinite_steps += 1
             self.optimizer.zero_grad(set_to_none=True)
@@ -324,6 +384,10 @@ class ExpertTrainer:
             "task_loss": task_loss.detach().item(),
             "kl_loss": kl_loss.detach().item(),
             "total_loss": total_loss.detach().item(),
+            "contrastive_loss": (
+                contrastive_loss.detach().item()
+                if contrastive_loss is not None else None
+            ),
             "lr": self.current_lr,
             "grad_norm": grad_norm,
             "stepped": stepped,
