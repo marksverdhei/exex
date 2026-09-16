@@ -12,26 +12,36 @@ def _batches(n=4, seq=16):
 
 
 class TestCentroidInit:
-    def test_rows_move_and_views_stay_synced(self, tiny_gemma4_moe):
+    def test_rows_move_views_synced_and_logit_calibrated(self, tiny_gemma4_moe):
         from exex.surgery import prepare_router_rows_for_training
         prepare_router_rows_for_training(tiny_gemma4_moe, [2])
         old_rows = [layer.router.proj.weight.data[2].clone()
                     for _, layer in iter_moe_layers(tiny_gemma4_moe)]
 
-        cosines = centroid_router_init(tiny_gemma4_moe, 2, _batches())
+        diags = centroid_router_init(tiny_gemma4_moe, 2, _batches(),
+                                     neg_batches=_batches(seq=8))
 
         layers = list(iter_moe_layers(tiny_gemma4_moe))
-        assert len(cosines) == len(layers)
-        for (_, layer), old in zip(layers, old_rows):
+        assert len(diags) == len(layers)
+        for (_, layer), old, d in zip(layers, old_rows, diags):
             new = layer.router.proj.weight.data[2]
             assert torch.isfinite(new).all()
             assert not torch.equal(new, old)
             # trainable view shares the storage -> identical values
             view = getattr(layer.router, "_router_row_2")
             assert torch.equal(view.data, new)
-            # rescaled to the mean row norm
-            target = layer.router.proj.weight.data.float().norm(dim=1).mean()
-            assert new.float().norm() == pytest.approx(target.item(), rel=0.05)
+            # calibrated: mean domain logit sits at the top-k boundary,
+            # not far above it (the c3 dominance failure)
+            assert d["slot_domain_logit"] == pytest.approx(d["kth_logit"], rel=0.05)
+
+    def test_no_routing_dominance_after_init(self, tiny_gemma4_moe, sample_batch):
+        """Slot must compete, not capture the router (26B job 2268845)."""
+        from exex.pruner import collect_router_stats
+        centroid_router_init(tiny_gemma4_moe, 2, _batches(),
+                             neg_batches=_batches(seq=8))
+        stats = collect_router_stats(tiny_gemma4_moe, [sample_batch])
+        # 4 experts, top-2: uniform selection freq = 0.5; dominance would be ~1.0
+        assert stats.selection_freq.mean(dim=0)[2].item() < 0.85
 
 
 class TestContrastive:
