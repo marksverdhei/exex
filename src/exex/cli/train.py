@@ -174,25 +174,32 @@ def main(argv=None):
     )
     n_trainable = sum(p.numel() for p in trainer.trainable_parameters)
 
-    if args.row_init == "centroid":
-        if args.clone_from is None:
-            raise SystemExit("--row_init centroid requires --clone_from")
-        from exex.separation import centroid_router_init
-        cen_texts = load_texts(args.dataset, args.text_column, args.row_init_samples)
-        def _cen_batches():
-            for t in cen_texts:
-                yield tokenizer(t, return_tensors="pt", truncation=True,
-                                max_length=args.max_length)
-        cosines = centroid_router_init(model, expert_indices[0], _cen_batches())
-        print(f"[row_init] centroid over {len(cen_texts)} texts; cosine(new,old) "
-              f"per layer min/mean/max = {min(cosines):.3f}/"
-              f"{sum(cosines)/len(cosines):.3f}/{max(cosines):.3f}", flush=True)
-
     neg_texts = None
     if args.neg_dataset:
         neg_texts = load_texts(args.neg_dataset, args.text_column, args.neg_samples)
         print(f"[contrastive] {len(neg_texts)} negative texts, "
               f"weight {args.neg_weight}, slot {expert_indices[0]}", flush=True)
+
+    if args.row_init == "centroid":
+        if args.clone_from is None:
+            raise SystemExit("--row_init centroid requires --clone_from")
+        from exex.separation import centroid_router_init
+
+        def _tok_batches(texts):
+            for t in texts:
+                yield tokenizer(t, return_tensors="pt", truncation=True,
+                                max_length=args.max_length)
+        cen_texts = load_texts(args.dataset, args.text_column, args.row_init_samples)
+        neg_cen = _tok_batches(neg_texts[:args.row_init_samples]) if neg_texts else None
+        diags = [d for d in centroid_router_init(
+            model, expert_indices[0], _tok_batches(cen_texts), neg_batches=neg_cen,
+        ) if d]
+        cos = [d["cosine_to_old"] for d in diags]
+        print(f"[row_init] centroid-diff over {len(cen_texts)} pos"
+              f"{' + neg' if neg_texts else ''} texts; cosine(new,old) "
+              f"min/mean/max = {min(cos):.3f}/{sum(cos)/len(cos):.3f}/{max(cos):.3f}; "
+              f"slot-vs-kth logit (layer0) = {diags[0]['slot_domain_logit']:.3f} "
+              f"vs {diags[0]['kth_logit']:.3f}", flush=True)
 
     print(f"Loading dataset {args.dataset}...", flush=True)
     if os.path.isfile(args.dataset):
